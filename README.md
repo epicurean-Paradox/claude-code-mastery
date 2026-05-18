@@ -158,19 +158,6 @@ claude skill add --from github YOUR_USER/claude-code-mastery
 
 ---
 
-## How This Differs from Other Guides
-
-| Aspect | Karpathy-style guides | This system |
-|--------|----------------------|-------------|
-| Scope | Single-file principles | Three-layer architecture |
-| Session handling | Not addressed | Continuity protocol + decay prevention |
-| Skill integration | Not addressed | Trigger tables with mandatory gates |
-| Hallucination prevention | "Think before coding" | Ground truth verification protocol |
-| Multi-project | Same rules everywhere | Layered: global + project-specific |
-| Long sessions | Not addressed | Self-correcting decay loop |
-
----
-
 ## Examples
 
 See [EXAMPLES.md](EXAMPLES.md) for real before/after scenarios showing each pillar in action.
