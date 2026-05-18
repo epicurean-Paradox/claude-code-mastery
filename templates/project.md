@@ -55,7 +55,9 @@ Every skill in the trigger table MUST pass all 3 audits on skills.sh before incl
 - Socket: PASS
 - Snyk: PASS
 
-WARN or FAIL on any = rejected. Verify at: `https://www.skills.sh/<org>/<repo>/<skill>`
+WARN or FAIL on any = rejected.
+
+**Enforcement**: before adding ANY skill to a trigger table, WebFetch `https://www.skills.sh/<org>/<repo>/<skill>` and extract the Security Audits section. If any audit is not PASS, reject the skill and suggest an alternative. Do not skip this check.
 
 ## Skill Triggers
 

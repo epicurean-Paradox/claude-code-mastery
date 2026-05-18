@@ -89,7 +89,9 @@ Claude Code has hundreds of community skills on [skills.sh](https://www.skills.s
 | Socket | PASS |
 | Snyk | PASS |
 
-**WARN or FAIL on any audit = skill rejected.** No exceptions. Check at `skills.sh/<org>/<repo>/<skill>` before adding.
+**WARN or FAIL on any audit = skill rejected.** No exceptions.
+
+**Automated enforcement**: instruct Claude Code to WebFetch `https://www.skills.sh/<org>/<repo>/<skill>` and extract the Security Audits section before adding any skill to a trigger table. If any audit is not PASS, the skill is rejected automatically.
 
 Then map vetted skills to task types in a **trigger table**, checked before every response:
 

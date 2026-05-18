@@ -90,7 +90,7 @@ Before any community skill enters a project's trigger table, it MUST pass all th
 
 **WARN = rejected. FAIL = rejected. Only PASS on all three.**
 
-To verify: go to `https://www.skills.sh/<org>/<repo>/<skill-name>` and check the Security Audits section. If any audit shows WARN or FAIL, the skill is not eligible — find an alternative or build your own.
+**Enforcement**: before adding ANY skill to a trigger table, WebFetch `https://www.skills.sh/<org>/<repo>/<skill-name>` and extract the Security Audits section. If any audit is not PASS, reject the skill and suggest an alternative. Do not skip this check.
 
 This is non-negotiable. A skill with a Snyk WARN may have known vulnerabilities in its dependency tree. A Socket WARN may indicate supply-chain risk. Do not override this gate for convenience.
 
