@@ -79,17 +79,29 @@ This creates a self-correcting loop. Claude audits itself instead of silently de
 
 ### 4. Skill-Driven Workflows
 
-Claude Code has hundreds of community skills. The problem: you have to remember to invoke them. The solution: **trigger tables** that map task types to skills, checked before every response.
+Claude Code has hundreds of community skills on [skills.sh](https://www.skills.sh/). The problem: you have to remember to invoke them, and not all of them are safe.
+
+**Security gate**: before any skill enters your trigger table, verify it passes all three security audits on skills.sh:
+
+| Audit | Required |
+|-------|----------|
+| Gen Agent Trust Hub | PASS |
+| Socket | PASS |
+| Snyk | PASS |
+
+**WARN or FAIL on any audit = skill rejected.** No exceptions. Check at `skills.sh/<org>/<repo>/<skill>` before adding.
+
+Then map vetted skills to task types in a **trigger table**, checked before every response:
 
 ```markdown
 ## Skill Gate (runs BEFORE any code)
 
-| Task type                  | Invoke first         |
-|----------------------------|----------------------|
-| Writing SQL                | `/sql-pro`           |
-| Pre-PR security review     | `/security-audit`    |
-| Database migration         | `/database-migrations-sql-migrations` |
-| Refactoring Python         | `/python-pro`        |
+| Task type                  | Invoke first         | Audits |
+|----------------------------|----------------------|--------|
+| Writing SQL                | `/sql-pro`           | 3/3 PASS |
+| Pre-PR security review     | `/security-audit`    | 3/3 PASS |
+| Database migration         | `/database-migrations-sql-migrations` | 3/3 PASS |
+| Refactoring Python         | `/python-pro`        | 3/3 PASS |
 ```
 
 Make security skills **mandatory** (non-negotiable gate). Make others **recommended** (strong default, override with reason).
@@ -122,14 +134,14 @@ Copy the three template files into position:
 
 ```bash
 # Global engineering standards (all projects)
-curl -o ~/CLAUDE.md https://raw.githubusercontent.com/YOUR_USER/claude-code-mastery/main/templates/global.md
+curl -o ~/CLAUDE.md https://raw.githubusercontent.com/epicurean-Paradox/claude-code-mastery/main/templates/global.md
 
 # Private preferences (communication style, personal rules)
 mkdir -p ~/.claude
-curl -o ~/.claude/CLAUDE.md https://raw.githubusercontent.com/YOUR_USER/claude-code-mastery/main/templates/private-global.md
+curl -o ~/.claude/CLAUDE.md https://raw.githubusercontent.com/epicurean-Paradox/claude-code-mastery/main/templates/private-global.md
 
 # Project-specific (copy into each project, then customize)
-curl -o ./CLAUDE.md https://raw.githubusercontent.com/YOUR_USER/claude-code-mastery/main/templates/project.md
+curl -o ./CLAUDE.md https://raw.githubusercontent.com/epicurean-Paradox/claude-code-mastery/main/templates/project.md
 ```
 
 ### Option B: Just the CLAUDE.md
@@ -137,13 +149,13 @@ curl -o ./CLAUDE.md https://raw.githubusercontent.com/YOUR_USER/claude-code-mast
 Drop the core skill file into any project:
 
 ```bash
-curl -o CLAUDE.md https://raw.githubusercontent.com/YOUR_USER/claude-code-mastery/main/CLAUDE.md
+curl -o CLAUDE.md https://raw.githubusercontent.com/epicurean-Paradox/claude-code-mastery/main/CLAUDE.md
 ```
 
 ### Option C: Claude Code skill
 
 ```bash
-claude skill add --from github YOUR_USER/claude-code-mastery
+claude skill add --from github epicurean-Paradox/claude-code-mastery
 ```
 
 ---

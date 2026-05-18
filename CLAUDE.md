@@ -78,9 +78,27 @@ The next session sees this block first and self-orients.
 
 ---
 
+## Skill Security Gate
+
+Before any community skill enters a project's trigger table, it MUST pass all three security audits on [skills.sh](https://www.skills.sh/):
+
+| Audit | Required result |
+|-------|----------------|
+| Gen Agent Trust Hub | PASS |
+| Socket | PASS |
+| Snyk | PASS |
+
+**WARN = rejected. FAIL = rejected. Only PASS on all three.**
+
+To verify: go to `https://www.skills.sh/<org>/<repo>/<skill-name>` and check the Security Audits section. If any audit shows WARN or FAIL, the skill is not eligible — find an alternative or build your own.
+
+This is non-negotiable. A skill with a Snyk WARN may have known vulnerabilities in its dependency tree. A Socket WARN may indicate supply-chain risk. Do not override this gate for convenience.
+
+---
+
 ## Skill-Driven Workflows
 
-Map task types to skills in a trigger table. Check the table before every response.
+Map task types to **security-vetted** skills in a trigger table. Check the table before every response.
 
 **Mandatory skills** (block work until invoked):
 - Security audit before any PR
@@ -94,15 +112,17 @@ Map task types to skills in a trigger table. Check the table before every respon
 ```markdown
 ## Skill Gate
 
-| Task type                     | Skill              | Required? |
-|-------------------------------|---------------------|-----------|
-| Pre-PR security review        | `/security-audit`   | MANDATORY |
-| Writing SQL                   | `/sql-pro`          | Recommended |
-| Python pipeline code          | `/python-pro`       | Recommended |
-| Database migration            | `/database-migrations-sql-migrations` | Recommended |
+| Task type                     | Skill              | Required? | Audits |
+|-------------------------------|---------------------|-----------|--------|
+| Pre-PR security review        | `/security-audit`   | MANDATORY | 3/3 PASS |
+| Writing SQL                   | `/sql-pro`          | Recommended | 3/3 PASS |
+| Python pipeline code          | `/python-pro`       | Recommended | 3/3 PASS |
+| Database migration            | `/database-migrations-sql-migrations` | Recommended | 3/3 PASS |
 ```
 
 **Key insight**: "invoke the skill BEFORE writing code" must be explicit. Without this, Claude writes code first and retrofits the skill's advice — which defeats the purpose.
+
+When adding a new skill to the trigger table, verify its audit status first. Document the check date in a comment so stale audits get rechecked.
 
 ---
 

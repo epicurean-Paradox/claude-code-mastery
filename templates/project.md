@@ -48,18 +48,28 @@ Do NOT work until these steps are complete.
 === END ===
 ```
 
+## Skill Security Gate
+
+Every skill in the trigger table MUST pass all 3 audits on skills.sh before inclusion:
+- Gen Agent Trust Hub: PASS
+- Socket: PASS
+- Snyk: PASS
+
+WARN or FAIL on any = rejected. Verify at: `https://www.skills.sh/<org>/<repo>/<skill>`
+
 ## Skill Triggers
 
 # Customize this table for your project's tech stack.
 # MANDATORY skills block work until invoked. Recommended skills are strong defaults.
+# Only include skills that pass all 3 security audits (see gate above).
 
-| Task type                     | Skill                    | Required?   |
-|-------------------------------|--------------------------|-------------|
-| Pre-PR security review        | `/security-audit`        | MANDATORY   |
-| Writing SQL                   | `/sql-pro`               | Recommended |
-| Python code                   | `/python-pro`            | Recommended |
-| Database migration            | `/database-migrations-sql-migrations` | Recommended |
-# Add more rows for your stack...
+| Task type                     | Skill                    | Required?   | Audits  |
+|-------------------------------|--------------------------|-------------|---------|
+| Pre-PR security review        | `/security-audit`        | MANDATORY   | 3/3 PASS |
+| Writing SQL                   | `/sql-pro`               | Recommended | 3/3 PASS |
+| Python code                   | `/python-pro`            | Recommended | 3/3 PASS |
+| Database migration            | `/database-migrations-sql-migrations` | Recommended | 3/3 PASS |
+# Add more rows for your stack... verify audits first.
 
 If you are about to write code and did not check the trigger table: STOP. Check it. Invoke if matched. Then proceed.
 
