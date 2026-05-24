@@ -178,6 +178,12 @@ See [EXAMPLES.md](EXAMPLES.md) for real before/after scenarios showing each pill
 
 ---
 
+## Lessons learned (in the wild)
+
+See [LESSONS.md](LESSONS.md) for real incidents from running this system on production projects, the rule changes they motivated, and the generalisable patterns behind them. Append new lessons there as they land — the accumulating list is the value.
+
+---
+
 ## Contributing
 
 Open an issue or PR. The best contributions are **real-world patterns** you've battle-tested across multiple sessions — not theoretical improvements.
