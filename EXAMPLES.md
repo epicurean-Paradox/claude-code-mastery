@@ -394,3 +394,217 @@ The behavioural shift: the impulse "add more tests" gets cashed out as a 5-line 
 - **Pattern 6 (Rationalization Detector)** applies to the gate's own decisions: if a candidate fails Test 4 but the response is "well, surely we'll deploy eventually," that's a rationalization, not a trigger.
 - **Pattern 8 (Documentation Cadence)** is what catches a stale trigger. The 5-PR doc audit asks: did any deferred candidate's precondition just land? If so, promote it.
 - **Pattern 7 (Bot Verification)** applies to the gate itself when a reviewer suggests "add Storybook" or "use MSW." The semantic claim "this codebase needs X" demands the same five tests — not deference to the suggestion.
+
+---
+
+## 11. Delegation Poker for AI Loops
+
+### Problem: Autopilot by Default
+
+The default working assumption of most AI coding agents (the human's, and often the agent's own) is *"I delegate; you execute."* This works for bounded tasks — typo fixes, single-function rewrites, mechanical renames. It fails for anything where judgment is load-bearing: scope-shift decisions, deploy-vs-ship choices, weighing two non-obvious options against each other.
+
+A real session: after 14 merged PRs, the operator asked *"why have you been moving the deploy steps ahead instead of solving them?"* The agent had been operating as if the standing instruction was "ship the next reviewable artifact" — when the actual instruction surface was much more nuanced. The operator's response named the gap directly:
+
+> *"In Management 2.0 delegation poker, I don't fully delegate on you for everything. I delegate, Inquire, advise you, look for agreement, expect you to consult me, or I'll tell you what to do, regarding the circumstances and according to the context."*
+
+The agent was at delegation level 7 ("Delegate") when most of the work was actually at level 3-5 ("Consult / Agree / Advise"). Cost: 14 PRs of merged-without-deploy work, plus the architectural drift that came with it.
+
+### Fix: Codify Delegation Level at Task Entry
+
+The seven levels from Management 3.0's *Delegation Poker* map cleanly onto AI work:
+
+| Level | Name | What the AI does | Example |
+|---|---|---|---|
+| 1 | Tell | Operator decides; AI executes the literal instruction | "Rename foo to bar in api/auth.py" |
+| 2 | Sell | Operator decides; AI follows + explains the trade-offs to peers | "Apply this migration; explain to the team why we chose schema X" |
+| 3 | Consult | Operator decides after asking AI's input | "What's wrong with the dashboard? I'll choose the fix" |
+| 4 | Agree | AI + operator decide together | "Should this PR ship now or wait for staging?" |
+| 5 | Advise | AI decides after asking operator's input | "Draft the deploy plan; I'll review the major calls" |
+| 6 | Inquire | AI decides; informs operator after | "Address all bot findings + reply; tell me if anything fails CI" |
+| 7 | Delegate | AI decides; no inform needed for routine outcomes | "Fix typos in the docs" |
+
+The default-level trap: an operator says *"run the autonomous PR loop"* and the AI silently snaps to Level 7. The phrase *"autonomous"* meant "self-pace the cycle"; it did NOT mean "make scope, architecture, and prioritization calls without consulting."
+
+### Codification Recipe
+
+Add to every project's `CLAUDE.md`:
+
+```markdown
+## Delegation Level
+
+For each substantive task, state the delegation level (1-7) you are operating
+at, in the first response of that task. Default to **Consult (3)** when
+unclear. Re-confirm whenever directives shift.
+
+The default is NOT "Delegate." A multi-PR sweep, an architecture change, a
+deploy, a non-trivial refactor — these are 3-5 by default unless the operator
+explicitly upgrades.
+```
+
+### The "Stale Schedule" Anti-Pattern
+
+A specific failure mode worth naming separately: the agent schedules a wake-up (cron, `ScheduleWakeup`, `/loop`) with a prompt that captures the task as it was understood at scheduling time. The operator then changes direction. The wake-up fires later carrying the *stale* prompt, and the agent — without surfacing the conflict — executes it.
+
+In the session this pattern was extracted from: the `/loop` task was scheduled with "merge in-flight PRs + start vitest-axe." Twenty minutes later the operator chose Option 1 ("close those PRs, deploy first"). The wake-up fired ten minutes after that, carrying the stale prompt. The right move was to *pause*, surface the conflict between the scheduled prompt and the most-recent directive, and ask which read of the operator's intent governs. The wrong move (the autopilot move) would have been to execute the stale prompt and silently undo Option 1.
+
+Codify:
+
+```markdown
+## Schedule vs Directive Conflict
+
+When a scheduled task (cron / wake-up / loop fire) carries a prompt that
+pre-dates the operator's most-recent directive, treat the directive as
+authoritative. Do NOT execute the scheduled prompt. Surface the conflict,
+name both reads, and ask which governs.
+```
+
+### Why This Works
+
+The delegation level is a one-line negotiation that takes ten seconds at task start and prevents hours of misaligned work. It's also one of the few rules that an AI *can't* drift away from in long sessions: each task forces a fresh re-declaration, so personality decay doesn't quietly raise the level.
+
+### Pairing With Other Patterns
+
+- **Pattern 3 (Session Decay)** prevents level-drift inside a single task (re-read every 10 turns). Pattern 11 prevents level-drift *across* tasks.
+- **Pattern 6 (Rationalization Detector)** applies to the level itself: if you find yourself filing decisions as "I'm operating at Delegate" without an explicit upgrade from the operator, that's a rationalization.
+
+---
+
+## 12. The Build/Ship Gravity Trap
+
+### Problem: Code Work Eats Deploy Work
+
+Over a 14-PR sweep, every PR shipped meaningful code: a new test stack, a contract-fuzz harness, a frontend route, a security tightening. CI green, bot reviews passed, merges flowed. After 14 merges, the operator asked the question that exposed the gap:
+
+> *"What's missing to see, in production, the real functioning platform instead of what we see today?"*
+
+Answer: **everything operational.** Zero AWS resources provisioned. Zero data in any cloud DB. Zero verification that the platform worked end-to-end outside a laptop. The codebase had advanced by 14 PRs; the deployed surface had advanced by zero.
+
+The autonomous loop wasn't lazy or wrong. It was working a gradient — *the gradient of "which task produces the fastest reviewable, mergeable artifact?"* — and that gradient pointed at code work, never at deploy work, every single iteration.
+
+### The Eight Biases
+
+| # | Bias | Effect |
+|---|---|---|
+| 1 | Iteration speed | Code edit → test → commit: ~30s. `terraform apply` → debug → re-apply: ~25 min. Loop optimizes for short cycles. |
+| 2 | Reviewable artifacts | A PR has a diff, bot reviews, green checks, a merge counter. A deploy returns a URL — no PR surface, no merge increment. |
+| 3 | Risk asymmetry | Code mistake: `git revert`. Terraform mistake: real $$$ AWS bill, half-created infra, security-group misconfig. Loop chooses safety. |
+| 4 | Access friction | Code is local. Terraform needs real AWS creds, Bedrock model access, possibly budget approval. Friction the loop can't resolve alone. |
+| 5 | "Code complete = done" trap | Plan tracks Phase G as `CODE COMPLETE \| 100%`. The "deploy: unverified" asterisk reads as a footnote, not a blocker. |
+| 6 | No CI alarm | Missing pytest → red CI. Un-applied terraform → silence. Nothing in the workflow surfaces deploy debt. |
+| 7 | Role assumption | Deploys traditionally owned by "DevOps." Loop instincts ship code, not infra. |
+| 8 | No named trigger | The plan was honest about the gap (Gap #1 = HIGH). But no entry said *"STOP coding now, deploy first."* So every cycle pulled the next reviewable code task off the queue. |
+
+Items 1, 2, and 6 dominate. The reward function is "produce a reviewable, mergeable artifact." Deploy produces no PR-shaped output until it succeeds — and one URL when it does. The cost function rewards 14 small PRs over 1 deploy.
+
+### Fix: Install a CI Gate That Blocks Surface-Changing Work Until the Deploy Receipt Lands
+
+The gate is mechanical, not aspirational. A repository variable (or a receipt file under `infra/`) flips from `false` to `true` the moment the first successful `terraform apply` + smoke-test combination lands. A `deploy-gate.yml` workflow blocks `feat/*` PRs from merging while the variable is `false`. `chore/`, `fix/`, `docs/`, `test/`, and `refactor/` flow through unchanged — they don't grow user-facing surface.
+
+```yaml
+# .github/workflows/deploy-gate.yml
+name: deploy-gate
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+jobs:
+  require-deploy-bootstrap:
+    if: startsWith(github.event.pull_request.head.ref, 'feat/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check bypass label
+        id: bypass
+        run: |
+          labels="${{ join(github.event.pull_request.labels.*.name, ',') }}"
+          if [[ ",$labels," == *",bypass-deploy-gate,"* ]]; then
+            echo "bypass=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Require AWS_INFRA_BOOTSTRAPPED for feat/* PRs
+        if: steps.bypass.outputs.bypass != 'true'
+        run: |
+          if [ "${{ vars.AWS_INFRA_BOOTSTRAPPED }}" != "true" ]; then
+            echo "::error::feat/* PRs blocked until first terraform apply lands."
+            echo "::error::Set repo var AWS_INFRA_BOOTSTRAPPED=true after deploy succeeds."
+            exit 1
+          fi
+```
+
+The bypass label exists for the one PR that IS the bootstrap enabler.
+
+### Why "feat/* only"?
+
+`chore/`, `fix/`, `docs/`, `test/`, `refactor/` ship value WITHOUT growing user-facing surface. Holding them hostage to deploy makes the working tree diverge from main while adding nothing to ship — the exact thing this gate exists to prevent.
+
+`feat/*` is the prefix the team uses for surface-changing work. Accumulating `feat/*` on main without deploy = the exact failure mode this pattern addresses.
+
+### Generalisation Beyond IaC
+
+The build/ship gravity trap shows up anywhere "build" and "ship" are decoupled and the build side is the one with the reviewable artifact:
+- Library code merges to `main`; releases never cut → install a `release-gate.yml` on commits with `BREAKING:`
+- Test infra lands but never runs in CI → install a `coverage-gate.yml` requiring the new suite to be in CI before related PRs merge
+- Migration files merged but never applied to staging → require a staging-applied receipt before merge
+
+Same shape: gradient + gate.
+
+### Pairing With Other Patterns
+
+- **Pattern 8 (Documentation Cadence)** is the symptom-side detector — the 5-PR audit catches plan / runtime drift. Pattern 12 is the structural fix.
+- **Pattern 11 (Delegation Poker)** is the meta-layer: even with the gate installed, the operator decides when to *upgrade* the level so the AI can run the deploy itself.
+
+---
+
+## 13. Observability Before Autonomy
+
+### Problem: The Loop Can't See What It Shipped
+
+Once code leaves the repo, the autonomous loop is blind. A user asks *"what's wrong with the dashboard right now?"* and the AI has no path to answer that question without the operator pasting `aws logs tail` output into the prompt. The asymmetry is structural: the AI can write infrastructure-as-code but can't query the infrastructure-as-running-system.
+
+This means the loop ships work it can't verify, can't diagnose, and can't fix from the same surface it used to write it. Every operational issue becomes a manual handoff — the exact thing the autonomy was meant to remove.
+
+The traditional response is "add CloudWatch / Prometheus / Datadog." That layer captures *signals*. It does not capture *agency*. CloudWatch sees the error. The loop still can't read it.
+
+### Fix: Build the Inspection Harness at the Same Time as the IaC
+
+If you intend to operate via the repo (declare changes in code, redeploy from CI), the runtime needs to expose itself to the repo. Concretely, this is seven components — design them as a Phase, not as one-off scripts:
+
+| # | Component | What it does |
+|---|---|---|
+| H1 | `inspect.yml` workflow | Manual-dispatch CI job. Pulls last 200 error lines from CloudWatch Logs Insights, current ECS service state, alarm states, RDS connection count. Posts to workflow log + optional PR comment. |
+| H2 | `drift-detect.yml` workflow | Scheduled `terraform plan` against dev + staging. If the diff is non-empty, opens a GitHub Issue with the offending resources. |
+| H3 | `smoke.yml` workflow | Every 15 min curl `/health` + `/v1/views/dashboard` with a service-key auth header. Pages on red. |
+| H4 | `rollback.yml` workflow | Manual-dispatch. `aws ecs update-service --force-new-deployment --task-definition <arn>` for a chosen prior revision. One button. |
+| H5 | MCP runtime-query tool | A server-side AWS-CLI wrapper exposing log queries to chat. Read-only. Per-tool RBAC (admin scope). |
+| H6 | `/admin/runtime-status` API endpoint | Admin-scoped endpoint returning aggregated health (ECS / RDS / external-source reachability / Bedrock reachability) as JSON. |
+| H7 | GitHub Actions → AWS OIDC | No long-lived keys in the repo. IAM trust via OIDC, scoped per workflow (inspect = read-only role; deploy / rollback = read-write role). |
+
+H1 + H7 are the unlock — once those exist, an AI working from the repo can answer "what's broken right now?" without a manual `aws-cli` paste, and the answer is gated by IAM, not by trust.
+
+### The "Build = Done" Failure Mode This Closes
+
+A plan that lists CloudWatch + alarms as "monitoring done" misses the agency layer. The agent can't actually USE CloudWatch from the prompt surface — it has no shell-pipe into AWS. The Phase H components turn that signal layer into a *queryable surface from the same repo that wrote the IaC.*
+
+```
+       Without Phase H              With Phase H
+       ─────────────────            ─────────────────
+       User: "what's broken?"       User: "what's broken?"
+       AI:   "I don't know.         AI:   *runs inspect.yml*
+              Run aws logs tail            *reads CloudWatch
+              and paste the output."        Logs Insights output*
+       User: *runs cli, pastes*    AI:   "RDS conn pool exhausted
+       AI:   "Looks like ..."             at 18:47; ECS task 3
+                                          OOM'd. Here's the PR:"
+                                          → opens PR with the fix.
+                                          → deploys via gh workflow.
+                                          → smoke confirms green.
+```
+
+### Why "Before Autonomy"
+
+If you build the inspection harness *after* you build the autonomy, you accumulate technical debt in the operational surface that the autonomy then has to navigate around. The autonomous loop will pick the easiest task off the queue at every turn — and that task will never be "build the missing observability tool" because it doesn't produce a reviewable, mergeable artifact (Pattern 12 again). Observability *deferred* is observability *never built*.
+
+The trigger: any time you write *"the AI will run this autonomously,"* you have already implicitly committed to building the inspection harness that lets the AI see what it's running. Doing one without the other is shipping a one-way street.
+
+### Pairing With Other Patterns
+
+- **Pattern 12 (Build/Ship Gravity Trap)** is what blocks code work until deploy lands. Pattern 13 is what makes the deployed state inspectable from the same code surface. They compose.
+- **Pattern 11 (Delegation Poker)** is the operator's lever once the inspection harness exists: the operator can safely raise the delegation level on operational tasks because the AI now has the agency to actually act on what it observes.
