@@ -608,3 +608,65 @@ The trigger: any time you write *"the AI will run this autonomously,"* you have 
 
 - **Pattern 12 (Build/Ship Gravity Trap)** is what blocks code work until deploy lands. Pattern 13 is what makes the deployed state inspectable from the same code surface. They compose.
 - **Pattern 11 (Delegation Poker)** is the operator's lever once the inspection harness exists: the operator can safely raise the delegation level on operational tasks because the AI now has the agency to actually act on what it observes.
+
+---
+
+## 14. Auth Surface Separation
+
+### Problem: Same Vendor, Two Tokens, One Confusion
+
+A real session: CI's auto-review job failed with *"ANTHROPIC_API_KEY: empty."* The product runtime uses AWS Bedrock to call Claude — no Anthropic key needed anywhere in the deployed stack. So why does CI need an Anthropic API key at all?
+
+The intuition that *"if the product uses Bedrock, the whole stack uses Bedrock"* is wrong but extremely natural. It costs hours of misdirected debugging.
+
+### Fix: Name the Two Surfaces Explicitly
+
+When the same vendor (Anthropic, OpenAI, AWS, Google, etc.) provides both a **product API** and a **CI / dev tool**, the auth paths are almost always independent. Codify the separation in the project's CLAUDE.md so it's not rediscovered every time:
+
+| Surface | Where it lives | Auth path |
+|---|---|---|
+| Product runtime | The deployed app (e.g. ECS, Lambda, Vercel) | Cloud-native IAM (e.g. AWS Bedrock IAM grant), no API key in source/secrets |
+| CI / dev tooling | GitHub Actions runners, dev laptops | Vendor's hosted-action token (e.g. `claude_code_oauth_token`, OpenAI dev key) stored as a CI secret |
+
+These pass through different network paths (your AWS account → Bedrock vs runner → `api.anthropic.com`), bill against different cost centres (your AWS bill vs your Anthropic subscription), and authenticate with different artefacts. Conflating them = a hot debug.
+
+### Concrete Examples
+
+| Vendor | Product surface | CI/dev surface | Common confusion |
+|---|---|---|---|
+| Anthropic | Claude via AWS Bedrock | `anthropics/claude-code-action` GitHub Action (OAuth or API key) | "We migrated to Bedrock; why does CI still need a key?" |
+| OpenAI | Azure OpenAI Service deployments | OpenAI CLI / `openai` package on a laptop | "We're Azure-only; why does the dev container have an OpenAI key?" |
+| AWS | Production workload | Local `aws-cli` for dev | "I gave the ECS task IAM; why does my terminal still need access keys?" |
+| Google | Cloud Run service | `gcloud` CLI | "Service account exists; why does the developer still need OAuth tokens?" |
+
+### Codification Recipe
+
+Add to project CLAUDE.md:
+
+```markdown
+## Auth Surface Separation
+
+This project has two distinct auth surfaces for vendor X:
+
+1. **Product runtime** uses <cloud-native IAM path>. NO API key in
+   `.env`, source, or secrets manager. The IAM grant is at <module>.
+
+2. **CI / dev tooling** uses <vendor's tool-specific token>. Stored
+   in <secret name> at <secret location>. Different cost centre,
+   different audit trail.
+
+When debugging an auth failure, identify which surface first. Failure
+in CI = check the CI secret. Failure in production = check the IAM
+grant.
+```
+
+### Why This Works
+
+Naming the separation up front turns a multi-hour debugging session into a one-minute check: which surface is failing? The fix is in different places per surface. Without the naming, the natural assumption (one vendor = one auth path) sends you to the wrong file.
+
+This pattern also catches the inverse mistake: an engineer fixing a "missing API key" issue in production by adding `ANTHROPIC_API_KEY` to Secrets Manager — when the actual fix is to grant Bedrock IAM permission to the ECS task role. The wrong fix would have shipped a secret the runtime never reads + left the real grant gap unaddressed.
+
+### Pairing With Other Patterns
+
+- **Pattern 7 (Bot Verification)** — when a bot says *"add the API key,"* verify *which* surface it's flagging. The right fix may be on the other side.
+- **Pattern 13 (Observability Before Autonomy)** — your inspection harness should surface both auth paths separately. `inspect.yml` querying CloudWatch alarms shows runtime auth failures; `gh secret list` shows CI-tool token health. Different shells, same dashboard.
