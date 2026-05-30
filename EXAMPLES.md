@@ -336,3 +336,61 @@ def _override_helper():
 ### Pattern
 
 Move dependency-override signatures' type annotations to module-scope canonical imports. Document the footgun in the shared fixture's docstring so the next teammate doesn't pay the 30-minute tax. The pattern generalizes: any framework that does signature introspection on overrides (Pydantic v2, FastAPI, several DI containers) can fall to the aliased-import trap.
+
+---
+
+## 10. The Test-Suite Inclusion Gate
+
+### Problem: Production-Grade by Addition
+
+A long autonomous sweep produces an obvious-feeling impulse: "add more tests." Coverage thresholds, mutation testing, contract fuzzing, visual regression, load testing, a11y, Storybook, MSW — every one is *good practice in the abstract*. So they get added. Six months later half the suites are skipped or stale, CI is 18 minutes, and the maintenance attention is leaking out of the actual product work.
+
+The failure mode is real and asymmetric: a missing test surfaces once (and gets noticed); an unjustified test runs every CI minute forever (and never gets removed).
+
+Worked instance from one 14-PR sweep:
+- Built a manual formulas editor PR (#137). Had to delete a render-time test because the project never bundled a DOM-rendering library. Concrete gap, real cost.
+- Considered adding `@testing-library`, `coverage-v8`, `schemathesis`, Storybook, Stryker (mutation testing), k6 (load testing), MSW, vitest-axe, visual regression. Eight candidates, all reasonable.
+- Adding all eight would have doubled CI time + tripled the maintenance surface for the next eight PRs.
+
+A gate was needed that wasn't "is this best practice?" (the answer is always yes) but "is this best practice **for this codebase, this week**?"
+
+### Fix: Five-Test Gate, Default DEFER
+
+Run every candidate test suite, testing-tool dependency, or coverage system through five tests. INCLUDE only if **all five pass**. Otherwise DEFER and write the trigger condition that flips the failing test.
+
+| # | Test | Question | Defer trigger when this fails |
+|---|---|---|---|
+| 1 | Concrete-gap | Can I name a recent PR or shipped bug where the absence of this tool bit us? | "best practice but no recent bite" |
+| 2 | Consumer | Does a workflow, CI gate, or human reviewer actually consume this signal today? | "we'd read the coverage report... someday" |
+| 3 | Substitution | Is the signal already arriving from another mechanism (bot reviewer, type checker, existing test, CI step)? | "duplicative until substitute fails" |
+| 4 | Prerequisite | Is the surface the tool measures actually present in the system today (deployed env, rendered component, populated DB)? | "load-testing nothing-in-prod is theater" |
+| 5 | Volume | Does callsite / scenario count cross the abstraction-overhead-vs-ad-hoc-cost threshold? | "MSW for 1 callsite" |
+
+### Worked Decisions From the Sweep
+
+The same five tests, applied uniformly, produced these decisions in a single autonomous loop:
+
+| Candidate | Tests | Verdict | Why |
+|---|---|---|---|
+| `@testing-library/react` + `user-event` + `jest-dom` | 1 ✅ 2 ✅ 3 ✅ 4 ✅ 5 ✅ | INCLUDE | Test 1 fired on PR #137 — had to delete a render-time test the day before. |
+| `@vitest/coverage-v8` | 1 ✅ 2 ✅ 3 ✅ 4 ✅ 5 ✅ | INCLUDE | Backend already runs `--cov-fail-under=80`; frontend had zero signal. Test 1 = pass via asymmetry. |
+| `schemathesis` (OpenAPI fuzz) | 1 ✅ 2 ✅ 3 ✅ 4 ✅ 5 ✅ | INCLUDE | First sweep flagged ~50 latent shape-drift bugs → unguarded surface was real. Default-skipped behind `RUN_CONTRACT_TESTS=1` until retrofit lands. |
+| `vitest-axe` (a11y) | 1 ✅ 2 ✅ 3 ✅ 4 ✅ 5 ✅ | INCLUDE NEXT | a11y bugs surface in real review; setup is cheap. |
+| Storybook | 1 ❌ 2 ❌ | DEFER | No designer-engineer review workflow exists. **Trigger**: designer asks to review components without a running app, OR component count > 150. |
+| Stryker (mutation testing) | 3 ❌ | DEFER | Bot reviewers already catch weak assertions. **Trigger**: bot reviewers go away OR test-quality bugs accumulate. |
+| k6 (load testing) | 4 ❌ | DEFER | No prod deployment to load-test. **Trigger**: first `terraform apply` smoke through ALB lands. |
+| MSW (Mock Service Worker) | 5 ❌ | DEFER | 1 callsite uses ad-hoc fetch mocking. **Trigger**: render-time API tests cross ~5 files OR ad-hoc pattern breaks on concurrent / streaming fetches. |
+
+### Why This Works
+
+The gate doesn't depend on memory or taste. Each test has an unambiguous answer pulled from the same artefacts that drive every other engineering decision: recent PRs (Test 1), the actual CI config + reviewer roster (Tests 2 + 3), the deployment state (Test 4), and a `grep -c` on the codebase (Test 5).
+
+A candidate that fails any test still gets a *Known Gap entry naming the failing test and its precondition*. So the gate isn't "reject and forget" — it's "defer with a named trigger condition." The next sweep cycle re-evaluates: did the prerequisite land? did the substitute fail? did the callsite count cross the threshold? When a trigger fires, the candidate auto-promotes to INCLUDE without a fresh debate.
+
+The behavioural shift: the impulse "add more tests" gets cashed out as a 5-line table, not a vibe. The same five tests, written into CLAUDE.md, also resist personality drift across sessions — the next context window applies the same gate, not whatever the current session's enthusiasm dictates.
+
+### Pairing With Other Patterns
+
+- **Pattern 6 (Rationalization Detector)** applies to the gate's own decisions: if a candidate fails Test 4 but the response is "well, surely we'll deploy eventually," that's a rationalization, not a trigger.
+- **Pattern 8 (Documentation Cadence)** is what catches a stale trigger. The 5-PR doc audit asks: did any deferred candidate's precondition just land? If so, promote it.
+- **Pattern 7 (Bot Verification)** applies to the gate itself when a reviewer suggests "add Storybook" or "use MSW." The semantic claim "this codebase needs X" demands the same five tests — not deference to the suggestion.

@@ -159,6 +159,20 @@ When overriding a FastAPI dependency that takes `request: Request`, the type ann
 
 Generalizes to any framework doing signature introspection on overrides.
 
+### 10. The Test-Suite Inclusion Gate
+
+"Add more tests" feels like a no-cost win. It isn't — every suite that lives in CI rents attention forever. Before adding any new test suite, dependency, or testing-tool, run it through five tests:
+
+1. **Concrete-gap** — name a recent PR or bug where its absence bit you
+2. **Consumer** — a workflow / gate / human actually reads the signal today
+3. **Substitution** — the signal isn't already arriving from somewhere else (bot reviewer, type checker, existing test)
+4. **Prerequisite** — the surface it measures actually exists (deployed env, rendered component, populated DB)
+5. **Volume** — callsite count justifies the abstraction overhead
+
+All five pass → INCLUDE. Any one fails → DEFER with a written trigger that names the failing test + the precondition that flips it. Worked sweep: 4 candidates (testing-library, coverage-v8, schemathesis, vitest-axe) INCLUDED; 4 (Storybook, Stryker, k6, MSW) DEFERRED with explicit triggers.
+
+The gate resists session-enthusiasm drift: the same five tests applied next month would produce the same verdicts. Failing candidates aren't forgotten — they're carried as Known Gaps with the exact precondition that flips them.
+
 ---
 
 ## Quick Start
