@@ -159,6 +159,38 @@ When overriding a FastAPI dependency that takes `request: Request`, the type ann
 
 Generalizes to any framework doing signature introspection on overrides.
 
+### 10. The Test-Suite Inclusion Gate
+
+"Add more tests" feels like a no-cost win. It isn't — every suite that lives in CI rents attention forever. Before adding any new test suite, dependency, or testing-tool, run it through five tests:
+
+1. **Concrete-gap** — name a recent PR or bug where its absence bit you
+2. **Consumer** — a workflow / gate / human actually reads the signal today
+3. **Substitution** — the signal isn't already arriving from somewhere else (bot reviewer, type checker, existing test)
+4. **Prerequisite** — the surface it measures actually exists (deployed env, rendered component, populated DB)
+5. **Volume** — callsite count justifies the abstraction overhead
+
+All five pass → INCLUDE. Any one fails → DEFER with a written trigger that names the failing test + the precondition that flips it. Worked sweep: 4 candidates (testing-library, coverage-v8, schemathesis, vitest-axe) INCLUDED; 4 (Storybook, Stryker, k6, MSW) DEFERRED with explicit triggers.
+
+The gate resists session-enthusiasm drift: the same five tests applied next month would produce the same verdicts. Failing candidates aren't forgotten — they're carried as Known Gaps with the exact precondition that flips them.
+
+### 11. Delegation Poker for AI Loops
+
+The default delegation level is NOT *"AI decides, then informs you."* Most substantive work — multi-PR sweeps, architecture changes, deploys, non-trivial refactors — sits at level 3-5 ("Consult / Agree / Advise"), not level 7 ("Delegate"). Codify the level at task entry; default to **Consult** when unclear; re-confirm whenever directives shift.
+
+Specific failure mode this names: the **stale schedule**. A scheduled wake-up (cron / `ScheduleWakeup` / `/loop`) carries a prompt that pre-dates the operator's most-recent directive. When the wake-up fires, treat the directive as authoritative — pause, surface the conflict, ask which read of intent governs. Do NOT execute the stale prompt on autopilot.
+
+### 12. The Build/Ship Gravity Trap
+
+An autonomous PR loop's reward function is *"produce a reviewable, mergeable artifact."* Deploy work produces no such artifact until it succeeds — and one URL when it does. Result: 14 small PRs land while zero deploys happen. Eight reinforcing biases (iteration speed, reviewable artifacts, risk asymmetry, access friction, "CODE COMPLETE = done," no CI alarm, role assumption, no named trigger) point the gradient at code, never at deploy.
+
+Mechanical fix: a `deploy-gate.yml` workflow that blocks `feat/*` PRs from merging until a repo variable (`AWS_INFRA_BOOTSTRAPPED=true`, set by the first successful deploy) flips. `chore/`, `fix/`, `docs/`, `test/`, `refactor/` flow through unchanged. Bypass label for the single PR that IS the bootstrap enabler. Generalizes anywhere build and ship are decoupled (library releases, migration application, test infra wiring).
+
+### 13. Observability Before Autonomy
+
+CloudWatch / Prometheus / Datadog capture *signals*. They do not capture *agency*. An AI working from the repo can write infrastructure-as-code but cannot, without a deliberate harness, query the running infrastructure-as-system. Every operational issue becomes a manual `aws logs tail` paste — the exact friction the autonomy was meant to remove.
+
+Build the inspection harness *at the same time* as the IaC: a `inspect.yml` manual-dispatch workflow that queries CloudWatch + ECS state, a `drift-detect.yml` scheduled `terraform plan`, a `smoke.yml` periodic curl, a `rollback.yml` one-button, a read-only MCP runtime-query tool, an admin `/runtime-status` endpoint, and GitHub Actions → AWS OIDC trust (no long-lived keys). H1 + H7 are the unlock — once both exist, "what's broken?" gets answered from the repo, not from a paste.
+
 ---
 
 ## Quick Start
