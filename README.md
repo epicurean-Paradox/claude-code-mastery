@@ -191,6 +191,14 @@ CloudWatch / Prometheus / Datadog capture *signals*. They do not capture *agency
 
 Build the inspection harness *at the same time* as the IaC: a `inspect.yml` manual-dispatch workflow that queries CloudWatch + ECS state, a `drift-detect.yml` scheduled `terraform plan`, a `smoke.yml` periodic curl, a `rollback.yml` one-button, a read-only MCP runtime-query tool, an admin `/runtime-status` endpoint, and GitHub Actions → AWS OIDC trust (no long-lived keys). H1 + H7 are the unlock — once both exist, "what's broken?" gets answered from the repo, not from a paste.
 
+### 14. Auth Surface Separation
+
+Same vendor, two tokens. The product runtime uses cloud-native IAM (AWS Bedrock, Azure OpenAI, GCP service accounts). The CI / dev tooling uses the vendor's hosted-action OAuth or API key. Different network paths, different cost centres, different audit trails — but the natural assumption ("we use vendor X" = "one auth path") sends debuggers to the wrong file every time.
+
+Real instance: CI's auto-review job failed with *"ANTHROPIC_API_KEY: empty."* The product uses Bedrock — no Anthropic key needed anywhere in the deployed stack. The failure was upstream-action-internal, not auth. The intuition that "Bedrock everywhere = no keys anywhere" delayed the right diagnosis by an hour.
+
+Codify the two surfaces explicitly in CLAUDE.md (which IAM grant for product, which secret for CI). When a vendor-auth bug surfaces, identify the surface *first*: failure in CI = check the CI secret; failure in production = check the IAM grant. Pairs with Pattern 7 (verify bot suggestions before applying — the bot may be flagging the wrong surface).
+
 ---
 
 ## Quick Start
