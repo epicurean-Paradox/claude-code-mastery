@@ -128,6 +128,39 @@ This single rule eliminates the most dangerous Claude Code failure mode: confide
 
 ---
 
+## Patterns That Surfaced Later
+
+Battle-tested additions from real multi-PR sessions. Same shape as the Five Pillars (problem → fix → why) but learned in the field rather than designed up front. See [EXAMPLES.md](EXAMPLES.md) for full write-ups.
+
+### 6. The Rationalization Detector
+
+When Claude (or you) files something as *"valid drift / documented divergence / defensible design choice,"* run two tests first:
+
+1. Does it violate a written ADR? → gap, not drift.
+2. Is it the lone exception to a sweep that touched every sibling? → gap, not drift.
+
+Either fires → promote to a Known Gap with concrete action items. Real session score: 3 of 5 items filed as "valid drift" were rationalizations.
+
+### 7. Bot Reviews Need Verification, Not Obedience
+
+Trivial mechanical bot suggestions (typos, missing imports, encoding fixes) apply as-is. **Semantic** suggestions — *"X is a no-op," "this is dead code," "this invariant holds"* — need a 60-second verification against the language spec or a microtest before applying. The phrase *"X always does Y"* is the verification trigger.
+
+Real example: a bot's "redundant `move_to_end`" claim almost shipped an LRU-eviction bug because `OrderedDict.__setitem__` doesn't reorder existing keys (only appends new ones).
+
+### 8. Documentation Cadence
+
+Plans rot in 9 days. Make doc-sync a standing rule, not a virtue: after every 5 merged PRs, audit `MASTER_PROJECT_PLAN.md` and `README.md` against `git log --since=<plan_last_updated>`. Any capability-surface delta that the docs don't cover → open a `docs/<short-description>` PR.
+
+The audit IS the work. Plan PRs are a legitimate output of the autonomous loop, not a chore.
+
+### 9. FastAPI Override Request-Injection Footgun
+
+When overriding a FastAPI dependency that takes `request: Request`, the type annotation **must** use a module-scope canonical `from fastapi import Request`. Aliased or function-local imports trip FastAPI's signature introspector → 422 with `loc:[query, request]` instead of an injected Request.
+
+Generalizes to any framework doing signature introspection on overrides.
+
+---
+
 ## Quick Start
 
 ### Option A: Full system (recommended)
