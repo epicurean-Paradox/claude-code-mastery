@@ -179,6 +179,8 @@ The default delegation level is NOT *"AI decides, then informs you."* Most subst
 
 Specific failure mode this names: the **stale schedule**. A scheduled wake-up (cron / `ScheduleWakeup` / `/loop`) carries a prompt that pre-dates the operator's most-recent directive. When the wake-up fires, treat the directive as authoritative — pause, surface the conflict, ask which read of intent governs. Do NOT execute the stale prompt on autopilot.
 
+Sharpest instance: a `/loop` re-fire said *"merge on green,"* but its text pre-dated a surfaced gemini **sec-HIGH** the prompt never contemplated. The loop was green — autopilot would have merged past a security gate. Pause, confirm the security override explicitly, then proceed. The stale prompt's green ≠ permission for a decision it didn't know about.
+
 ### 12. The Build/Ship Gravity Trap
 
 An autonomous PR loop's reward function is *"produce a reviewable, mergeable artifact."* Deploy work produces no such artifact until it succeeds — and one URL when it does. Result: 14 small PRs land while zero deploys happen. Eight reinforcing biases (iteration speed, reviewable artifacts, risk asymmetry, access friction, "CODE COMPLETE = done," no CI alarm, role assumption, no named trigger) point the gradient at code, never at deploy.
@@ -198,6 +200,54 @@ Same vendor, two tokens. The product runtime uses cloud-native IAM (AWS Bedrock,
 Real instance: CI's auto-review job failed with *"ANTHROPIC_API_KEY: empty."* The product uses Bedrock — no Anthropic key needed anywhere in the deployed stack. The failure was upstream-action-internal, not auth. The intuition that "Bedrock everywhere = no keys anywhere" delayed the right diagnosis by an hour.
 
 Codify the two surfaces explicitly in CLAUDE.md (which IAM grant for product, which secret for CI). When a vendor-auth bug surfaces, identify the surface *first*: failure in CI = check the CI secret; failure in production = check the IAM grant. Pairs with Pattern 7 (verify bot suggestions before applying — the bot may be flagging the wrong surface).
+
+### 15. The Vendored-Artifact Carve-Out
+
+A blocking quality/security gate (bot sec-HIGH, emoji ban, lint) exists to protect the **shipped attack surface**. So scope it to **first-party shipped code only**. A finding confined to a *vendored, non-shipped artifact* — one on a path provably outside every build / serve / deploy path — has zero product blast radius and is NOT merge-blocking, even at sec-HIGH.
+
+Real instance: a gemini sec-HIGH XSS landed on a designer's prototype `settings.html` mockup vendored under `docs/`. It is imported by nothing in `frontend/src`, in no Dockerfile `COPY`, never served to a user. "Fixing" it would fork the vendor's handoff from what they maintain — for zero security gain.
+
+Carved findings get **flag-and-bind**, not a fix-in-place: (a) reply on the PR, (b) flag the artifact's owner, (c) record a must-not-replicate constraint on the production increment that will author that surface fresh (and pass the full gate then). **Guardrail — the carve-out voids if any fail:** the reachability premise holds (voids the instant the artifact is imported / served); all three flag-and-bind obligations are met; it is vendored/third-party, never first-party code. The guardrail is what stops the carve-out from becoming a loophole.
+
+### 16. CI-Gate Right-Sizing
+
+Flipping a check to a *blocking, per-PR* gate is a cost decision, not just a correctness one. A gate that is too slow or too broad gets fought, not respected — you spend more PRs fighting its config than it ever saves.
+
+Real instance: a schemathesis contract sweep flipped to a per-PR gate ran ~40 min × 3 Python versions on **every** PR (including docs-only). It took five PRs of ceiling-bumps before the actual fix: **path-filter** (run only when the guarded surface changes) + **single-version** (the contract is version-invariant) + **lean install** (the heavy ML stack it never imported was the timeout cause) + **bounded fuzz budget** (`max_examples` 25→8). Same coverage, ~9× cheaper, no longer cancels.
+
+Four levers, every blocking gate: filter to the surface it guards; run version-invariant checks once; install only what the check executes; bound any fuzzed budget. Decide all four *before* flipping the gate on.
+
+### 17. Functional Increments ("functional % not code %")
+
+"85% built, 40% usable" is the signature of **layer-slicing** — whole backend, whole infra, frontend scaffold — where each layer is "done" but no single user capability works end to end. Fixtures and stubbed endpoints are the tell: they mark where a vertical slice was cut horizontally and the bottom half deferred.
+
+Real instance: a platform read ~85% plumbing-complete yet ~40% functional. The e2e lane was *mocked*, so it was blind to fixture-vs-real and fake numbers passed CI green — the test surface itself couldn't see the gap.
+
+Fix: slice vertically. Each increment is DB → API → UI with real data, deletes its fixture in the same PR, and ships a real-data e2e (not a mocked one). The headline metric becomes `increments-with-a-passing-real-data-e2e / total`, never code coverage. Extends Pattern 12 (Build/Ship Gravity) from "did it deploy" to "does real data flow through it."
+
+### 18. Inverted Grilling
+
+Point your domain skills (architect, product-designer, ui-designer) *back at your own plan* and have them ask the load-bearing questions nobody asked. Cross-lens contradictions are the gold.
+
+Real instance: architect-grilling fixed a golden path as "chat composes a KPI"; product-designer-grilling then named the primary persona "exec / answer-seeker" — a direct contradiction (composing is an analyst task) that reordered the entire roadmap and deferred the heaviest, riskiest increment. The same pass also exposed an unverified make-or-break data assumption (the headline feature needed a per-account input store that did not exist).
+
+Before committing a plan, run an inverted pass per relevant lens: "what hasn't been asked that would change this?" The contradictions between lenses surface fastest and matter most.
+
+### 19. Deletion-Test Before Building
+
+The deletion test ("delete the module — does complexity vanish or concentrate?") is usually aimed at legacy code. Aim it at a *proposed* abstraction before you build it. Don't build the seam the endstate deletes.
+
+Real instance: a planned `ViewDataSource` fixture|live adapter seam. Starting it revealed the endstate deletes all fixtures, leaving one adapter wrapping the existing data hooks — a pure pass-through. Caught pre-build; the per-view work folded into each go-live increment instead of into a speculative abstraction that would have been dead weight on arrival.
+
+If the abstraction is a pass-through at its endstate, it is scaffolding, not architecture — and scaffolding you build up front is just debt with good intentions.
+
+### 20. Local-Validate to Break a CI Ping-Pong
+
+Blind CI iteration — push a config tweak, wait for the runner, read one failure, repeat — is slow, expensive, and surfaces failures one at a time. After about two blind retries, stop and build a local reproduction.
+
+Real instance: a CI gate's config was fixed-and-pushed repeatedly (ceiling 25→40→still-cancelled, then a missing plugin). Reproducing the exact environment locally against a scratch DB surfaced every failure mode at once and measured the true runtime — ending a loop that blind iteration would have dragged out for many more cycles.
+
+The trigger is mechanical: when a CI config fights back twice, the next move is a local repro, not a third guess.
 
 ---
 
