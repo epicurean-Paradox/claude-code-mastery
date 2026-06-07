@@ -81,3 +81,14 @@ Before making ANY claim about system state:
 - Database: run the query, don't cite documentation
 - Files: check they exist, don't assume from memory
 - APIs: verify endpoints respond, don't trust old docs
+
+
+## Branch & CI Discipline
+
+- Branch from fresh `main` every PR: `git checkout main && git pull`, then branch. When two PRs touch the same files, merge the first before branching the second.
+- A required check that mass-`ERROR`s at fixture/setup on one matrix leg (Docker/testcontainers, one language version) is a flake — re-run the job, don't edit code to chase it.
+- `terraform workspace show` before any `apply`/`destroy`; review destroy plans for cross-env/cross-project resources.
+
+## Multi-agent
+
+- Ultracode is opt-in only (keyword `ultracode`, an explicit "use a workflow" request, or a skill that calls it). Use it for parallel/broad/adversarial work, not serial gate-bound chains. See global.md "Multi-agent / Ultracode Usage".
