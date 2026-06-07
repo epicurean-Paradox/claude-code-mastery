@@ -57,3 +57,77 @@ When a session hits context limit, the continuation summary MUST include:
 3. Any blockers or decisions pending user input.
 
 Do NOT start work in a continuation session until reading project context files.
+
+
+## Branch & PR Pipeline
+
+Extends "Git Conventions". One PR = one concern still holds; these sharpen *how you sequence and stage the work*.
+
+### Branch from fresh main, every time
+
+- Right before each new PR: `git checkout main && git pull`, then branch. Never branch off a stale local `main` or accidentally off another feature branch.
+- One branch = one concern. Never reuse a branch for an unrelated change, even a one-liner — open a new branch from fresh `main`.
+
+### Sequence-dependent PRs
+
+- When two PRs touch overlapping files, **merge the first before branching the second.** Branching the second off pre-merge `main` guarantees stacked-conflict churn at merge time (seen with `intake.py` / `set_status` across consecutive PRs).
+- If the work genuinely can't wait for the merge, branch off the first branch and rebase after it merges — treat that as the exception, not the default.
+
+### Cross-repo / cross-service features
+
+- Sequence so the **enabling change merges first**: the receiving endpoint before the caller, the schema before the writer, the consumer before the producer.
+- **Gate runtime on config** so the not-yet-deployed half no-ops. The deployed-but-unused half must carry zero risk: off by default, flipped on only once both sides are live.
+- For a shared secret: generate it on one side, copy it to the other's secret store. Never commit it; never log it.
+
+### Staging the commit
+
+- gitignored artifacts (`coverage.xml`, `*.tfvars` with real values, build output) MUST NEVER be staged. `git status` before every commit; `git restore --staged` / `git clean` anything ignored that slipped in.
+- CI is the gate, not local hooks — `git push --no-verify` is fine when a local hook is slow or flaky. The required checks decide mergeability.
+
+### CI flake discipline
+
+- A required check that mass-`ERROR`s at **fixture/setup** on a **single matrix leg** (testcontainers/Docker won't start, one language version) is a flake, not your bug. **Re-run the failed job.**
+- Distinguish "tests *ran* and *asserted* false" (your bug) from "tests never started" (infra flake) before touching anything. Do not edit code to chase a green you can't explain.
+
+### CD / infra hygiene
+
+- Keep the deploy queue clean: cancel superseded or parked deploy runs so the latest commit isn't blocked behind dead ones.
+- ALWAYS confirm the target before `apply`/`destroy`: `terraform workspace show`. Acting in the wrong workspace is silent and expensive.
+- Review every `destroy` plan resource-by-resource and confirm **zero** cross-env / cross-project resources before applying. A destroy plan that names anything outside the intended scope is a stop, not a prompt.
+
+### Response gate
+
+- Before a PR is "ready": every bot comment (Gemini, Claude auto-review, any reviewer) gets either a fix commit or an inline reply referencing the fix commit. See LESSONS Lesson 1 — the severity gate decides what blocks merge; the response gate decides what you owe the reviewer.
+
+## Multi-agent / Ultracode Usage
+
+Ultracode (the Workflow multi-agent engine) is **opt-in only**. It can spawn dozens of agents — token cost scales with agent count. Spin it up only when one of these is true, and never infer scale the user did not ask for:
+
+- The user types the keyword `ultracode`.
+- The user explicitly asks to "use a workflow" or "fan out agents".
+- A skill the user invoked calls it.
+
+### Fit-for-parallel, not serial
+
+Parallelism is a property of the *work*, not a speed dial — it only buys speed when the units are independent.
+
+- **Good fits** (parallel / broad / adversarial / scale): multi-perspective review councils (N domain reviewers + one synthesis pass), exhaustive adversarial audits (finders surface, skeptics refute, majority vote decides), completeness sweeps (plan-vs-code, every-modality), broad mechanical migrations across many files.
+- **Bad fits** (sequential / gate-bound / judgment-heavy): cross-repo wiring, deploy-gated steps, anything where stage N needs stage N-1's verified result. Fanning out a serial chain pays orchestration overhead without moving the real bottleneck (human review, CI, deploy gates). Keep these single-threaded.
+
+### Lightweight vs heavy
+
+- **Plain Agent tool** (a few parallel subagents you synthesize) is the default — enough for a review council or quick multi-perspective pass.
+- **Workflow engine** is reserved for heavier exhaustive / looping passes where the orchestration itself (barriers, voting, loop-until-dry) is load-bearing.
+
+### Patterns
+
+- **Pipeline-by-default** — no barrier between stages unless a stage genuinely needs ALL prior results.
+- **Adversarial verify** — skeptics must refute, not rubber-stamp; a majority of skeptics kills a finding.
+- **Loop-until-dry** — re-run finders until a pass produces nothing new.
+- **Completeness critic** — a dedicated agent checks coverage, not correctness.
+- **Multi-modal sweep** — one agent per modality / surface.
+- Scale agent count and verification depth to how thorough the user asked for — not to how thorough you could be.
+
+### Cost honesty
+
+When a workflow bounds coverage (top-N findings, sampling, no-retry, capped agent count), say so explicitly and name what was dropped. The user decides whether bounded coverage is acceptable — do not silently present a partial sweep as exhaustive.

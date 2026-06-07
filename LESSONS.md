@@ -206,3 +206,60 @@ When you encounter a new failure mode worth capturing, follow the same shape:
 4. **Generalisable pattern** -- the one-paragraph version that explains why the rule exists, so future readers can apply it to situations that don't exactly match the original.
 
 Append, don't overwrite. The accumulating list is the value.
+
+
+---
+
+## Lesson 6 -- Branch from fresh main; re-run flakes, don't chase them
+
+### What happened
+
+Two failure modes recurred across consecutive PRs on the same project.
+
+First: a sequence of PRs touched overlapping code (`intake.py` and a shared `set_status` helper). The second branch was cut before the first merged, off a local `main` that was already behind. Every later PR in the chain hit avoidable merge conflicts — the same edits re-surfacing as "conflicts" against a `main` that had since moved.
+
+Second: a required CI check went red with a wall of `ERROR`s. The failures were all at fixture setup on a single matrix leg — testcontainers couldn't bring up Docker on one Python version. The other legs were green and no assertion had actually failed. The reflex was to treat red-required-check as "my code is broken" and start editing to make it pass.
+
+### What was wrong with the response
+
+Both stem from skipping a cheap verification step before acting.
+
+The stacked-conflict churn came from branching off stale/parallel state instead of off freshly-pulled `main` after the predecessor merged. The work was sequence-dependent and was treated as if it were independent.
+
+The flake-chasing came from conflating "the check is red" with "my code is wrong." A check that errors at *setup* on *one leg* never ran the assertions — it carries no signal about the code. Editing code to chase it is debugging a phantom, and risks shipping a change that only "fixed" a green by coincidence.
+
+### What changed in the system
+
+Two rules landed in the branch & PR pipeline:
+
+> Right before each new PR: `git checkout main && git pull`, then branch. When two PRs touch overlapping files, merge the first before branching the second — branching off pre-merge `main` guarantees stacked-conflict churn.
+
+> A required check that mass-`ERROR`s at fixture/setup on a single matrix leg (Docker/testcontainers, one language version) is a flake, not your bug. Re-run the failed job. Distinguish "tests ran and asserted false" (your bug) from "tests never started" (infra flake) before touching code.
+
+### Generalisable pattern
+
+Before acting on git state or a CI signal, verify what the state/signal actually *is*. Stale `main` and a setup-phase flake both *look like* work to do — a conflict to resolve, a failure to fix — but the correct response is to refresh the base or re-run the job, not to start editing. The expensive mistakes here are mis-routed effort: solving a conflict that a fresh branch wouldn't have, or "fixing" code against a check that never tested it. One pull, one re-run, one `workspace show` — cheap checks that prevent hours of chasing the wrong thing.
+
+---
+
+## Lesson 7 -- Multi-agent is opt-in, and for parallel work not serial chains
+
+### What happened
+
+The multi-agent / Ultracode engine (the Workflow orchestrator) can spawn dozens of agents in one invocation. Two failure modes recurred: (a) it got reached for unprompted, on tasks where the user never asked for a workflow, burning large token budgets by default; and (b) it got pointed at sequential, gate-bound chains (cross-repo wiring, deploy-gated steps), where fanning out a serial pipeline added agent overhead without moving the actual bottleneck — every stage still had to wait on the verified output of the one before it, and the human/CI gates downstream were unchanged.
+
+### What was wrong with the response
+
+The engine was treated as a general accelerator ("more agents = faster"). It isn't. It is a tool for breadth and adversarial depth, not for compressing a dependency chain. Parallelism only buys speed when the units of work are independent. A serial chain run in parallel is still serial — you just pay for the orchestration. And reaching for it without being asked imports a token cost the user never signed up for, often inferring a scale ("audit everything") the user never specified.
+
+### What changed in the system
+
+A "Multi-agent / Ultracode usage" section was added to global guidance with three gates:
+
+> 1. **Opt-in only.** Invoke the engine only on the keyword `ultracode`, an explicit "use a workflow / fan out agents" request, or a skill that calls it. Never infer scale the user did not ask for.
+> 2. **Fit-for-parallel, not serial.** Good fits are parallel/broad/adversarial/scale: review councils, adversarial audits with refuting skeptics + majority vote, completeness sweeps, broad migrations. Bad fits are sequential, gate-bound, judgment-heavy chains — keep those single-threaded. For light cases, a few plain subagents you synthesize beat the full engine; reserve the engine for exhaustive/looping passes.
+> 3. **Cost honesty.** When a workflow bounds coverage (top-N, sampling, no-retry), state what was dropped.
+
+### Generalisable pattern
+
+Parallelism is a property of the *work*, not a speed dial. Independent breadth and adversarial depth parallelize; dependency chains do not. Before fanning out, ask "are these units actually independent?" and "did the user ask for this scale?" — if either answer is no, stay single-threaded and say what you're not covering.
