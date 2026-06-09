@@ -18,7 +18,7 @@ below.
 
 | Skill | Upstream | License | Source commit | Retrieved |
 |---|---|---|---|---|
-| [handoff](handoff/SKILL.md) | [mattpocock/skills](https://github.com/mattpocock/skills/tree/main/skills/productivity/handoff) | MIT (c) 2026 Matt Pocock — see [handoff/LICENSE](handoff/LICENSE) | `d54c497aa94400a496d3f2c38be10fa5f284c5a9` | 2026-06-09 |
+| [handoff](handoff/SKILL.md) | [mattpocock/skills](https://github.com/mattpocock/skills/tree/d54c497aa94400a496d3f2c38be10fa5f284c5a9/skills/productivity/handoff) | MIT (c) 2026 Matt Pocock — see [handoff/LICENSE](handoff/LICENSE) | `d54c497aa94400a496d3f2c38be10fa5f284c5a9` | 2026-06-09 |
 
 ### handoff
 
