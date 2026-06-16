@@ -263,3 +263,75 @@ A "Multi-agent / Ultracode usage" section was added to global guidance with thre
 ### Generalisable pattern
 
 Parallelism is a property of the *work*, not a speed dial. Independent breadth and adversarial depth parallelize; dependency chains do not. Before fanning out, ask "are these units actually independent?" and "did the user ask for this scale?" — if either answer is no, stay single-threaded and say what you're not covering.
+
+---
+
+## Lesson 8 -- Convene a skill council for load-bearing design; ground the names before you build
+
+### What happened
+
+A design question -- how should "cards" and "workspaces" be modelled so they are shareable and reusable -- started with the assistant answering each new scenario by adding a *type* or an *enum value*: a per-account card, then a `scope: global` card, then a `scope: cohort` card. The operator caught it: *"every new case creates a new type -- the architecture is not sustainable. Challenge how cards are built."*
+
+Instead of patching further, the work was restructured as a sequence of domain-expert skills, each refining the last: `senior-data-scientist` (aggregation correctness) -> `product-manager` (shareability scope) -> `architecture-patterns` (the Open/Closed restructure) -> `ddd-strategic-design` (bounded contexts, ubiquitous language) -> `ddd-tactical-patterns` (aggregate / value-object / specification). Before any of it was written to an ADR, the proposed vocabulary was checked against two *external* jargons -- DDD and dimensional / semantic-layer (OLAP) modelling -- which surfaced that "Measure" should be "Metric", that "Reducer" was FP jargon hiding the **additivity** hazard, and that "Population" had silently fused *selection* with *grain*.
+
+### What was wrong with the response
+
+The first instinct -- one skill, one pass, a new type per case -- produced a combinatorial type explosion (cardinality x time-mode x presentation) and named the concepts in ad-hoc language. A single domain lens cannot catch a cross-domain modelling error: the data-science lens sees the aggregation trap, the DDD lens sees the value-object / aggregate boundary, the dimensional-modelling lens sees the grain / measure confusion. Answering from one seat misses the others.
+
+### What changed in the system
+
+A rule for load-bearing design decisions (schema, domain model, anything that becomes an ADR):
+
+> Do not one-shot a structural design from a single skill. Convene a **council**: invoke domain skills in sequence, each consuming the prior's output (DS -> PM -> architecture -> DDD strategic -> DDD tactical is a strong default for a data-modelling decision). Before codifying the result, **validate the nomenclature against the established jargon of the relevant fields** -- the right word usually already exists and often carries a known hazard in its name (e.g. *non-additive measure* warns you not to average it). Variation that recurs as "a new type per case" belongs in **data (config), not types (code)**; treat new-type-per-scenario as a modelling smell to challenge.
+
+### Generalisable pattern
+
+A council of narrow experts beats one generalist pass on any decision that spans domains -- and almost every structural decision does. The sequence matters (each lens refines the last), and the cheapest quality gate is *naming*: map your invented terms onto the field's existing vocabulary before you write them into a schema or ADR. If a single skill keeps adding types to cover new cases, stop and ask whether the variation is data.
+
+---
+
+## Lesson 9 -- Long-running tasks survive a shared working directory only if you drive them remotely
+
+### What happened
+
+Several Claude Code sessions shared one working directory. Midway through a multi-PR task (open a PR, address bot review, merge, then a follow-up fix PR), a *concurrent* session switched the shared checkout back to `main` -- the local branch changed under an in-flight task. Commits were not lost (they were already pushed), but any further step that assumed "I am on branch X locally" would have acted on the wrong tree.
+
+### What was wrong with the response
+
+The task had been planned around local git state (checkout the branch, rebase, push). In a shared working directory that assumption is unsafe: another session's `git checkout` mutates your ground. Relying on local branch position for a long-running, interrupt-prone task is a race.
+
+### What changed in the system
+
+Two habits for long-running VCS tasks in shared working-tree environments:
+
+> 1. Drive through **remote** operations that do not depend on the local checkout: `gh pr merge`, `gh pr update-branch`, `gh api` -- not `git checkout` + local rebase -- whenever a remote equivalent exists. The PR, not the working tree, is the unit of state.
+> 2. **Inline per-command credentials** (`GH_TOKEN=$(...) gh ...`) so a global `gh auth switch` by you or another session never silently retargets your writes. Re-fetch state (`gh pr view`) at the start of every resumed step rather than trusting remembered position.
+
+### Generalisable pattern
+
+A working directory is shared mutable state. Any task that spans multiple turns or sleeps on CI can be interrupted by another actor editing that state. Keep the durable unit of work somewhere the interruption cannot move it -- here, the remote PR -- and re-read state on resume instead of trusting what you remember. This is the working-tree analogue of Lesson 4's identity hygiene.
+
+---
+
+## Lesson 10 -- A documented merge process is not an enforced one
+
+### What happened
+
+A project ran an elaborate PR pipeline in its `CLAUDE.md` -- mandatory reviews, required green checks, a response gate -- for months. While setting up branch protection, a one-line API check revealed `main` was **not protected at all**: zero required status checks, direct pushes allowed, no gate. The entire documented process was convention, enforced only by the operator and assistant remembering to follow it.
+
+### What was wrong with the response
+
+The process doc had been treated as if writing the rule enforced it. Nothing in the substrate (GitHub branch protection / rulesets) backed the policy. A single direct push, or one forgotten check, would bypass the whole pipeline with no friction.
+
+### What changed in the system
+
+Branch protection was made to match the *actual* review topology, with two design rules that are easy to get wrong:
+
+> 1. **Require only checks that run on every PR.** A path-filtered check (one that only fires on certain directories) marked as required will hang a PR forever as "expected -- waiting", because it never reports on PRs that do not touch its paths. Require the always-run subset; verify each required context name matches the live check name exactly.
+> 2. **Match the gate to who actually reviews.** Bot reviewers (Gemini, Claude auto-review) *comment*; they do not `APPROVE`. Requiring a human approving review when the author is usually solo self-blocks every PR. For a solo + bots topology, gate on **CI + PR-required**, not human approval, and let the bots gate via their own check.
+
+And a standing check: when a process doc assumes an enforcement substrate (branch protection, required checks, CODEOWNERS), verify the substrate exists -- do not assume the written rule is live.
+
+### Generalisable pattern
+
+Documentation describes intent; it does not enforce it. Any policy that *could* be enforced by the platform but is not is one slip from being bypassed silently. Periodically reconcile the written process against the actual configuration, and when you wire the enforcement, shape it to your real review topology -- the wrong required check (path-filtered, or a human approval a solo author cannot give) converts "protected" into "permanently blocked".
