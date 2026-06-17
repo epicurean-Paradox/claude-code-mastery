@@ -670,3 +670,98 @@ This pattern also catches the inverse mistake: an engineer fixing a "missing API
 
 - **Pattern 7 (Bot Verification)** — when a bot says *"add the API key,"* verify *which* surface it's flagging. The right fix may be on the other side.
 - **Pattern 13 (Observability Before Autonomy)** — your inspection harness should surface both auth paths separately. `inspect.yml` querying CloudWatch alarms shows runtime auth failures; `gh secret list` shows CI-tool token health. Different shells, same dashboard.
+
+---
+
+## 15. Verify Every Gate (Badge != Outcome)
+
+### Problem: A Green Pipeline That Shipped Nothing
+
+A deploy phase strung together gates: push -> remote -> merge -> deploy -> render -> wire -> serve. Each green signal was read as proof of the next state. Result, in turn: a branch that never reached the remote (clean `push` exit, `-u` no-op'd), a PR MERGED green with the *pre-fix* code on `main`, a merge that never triggered a deploy, a deploy whose buttons rendered as empty boxes, an endpoint no frontend called, and an integration "live" on a `401` that returned `502` to authed traffic.
+
+### Fix: One Probe Per Transition
+
+Never infer a downstream state from an upstream signal. Each "therefore" gets a cheap, specific check:
+
+```bash
+# "Pushed" -> confirm the remote actually has your SHA
+git push origin HEAD:my-branch
+git ls-remote origin my-branch          # SHA must equal local HEAD; clean exit is not enough
+gh pr view --json headRefOid --jq .headRefOid
+
+# "My fix is in main" -> confirm by content, not by the MERGED badge
+git show origin/main:path/to/file.py | grep 'the_fix_token'
+
+# "Merged -> deployed" -> confirm a deploy run was actually created
+gh run list --workflow deploy.yml --event workflow_run --limit 3
+
+# "Deployed -> working" -> observe the live surface, don't trust the build
+curl -sS https://app.example.com/health
+# and for UI: load it (Playwright / real browser); a correct build can render dead DOM
+
+# "Endpoint exists -> feature done" -> wiring is a separate axis
+rg "fetch\\(['\"].*/v1/the-endpoint" frontend/src   # does anything actually call it?
+
+# "401 on no-auth -> live" -> the data path is the real gate
+curl -sS -H "Authorization: Bearer $TOK" https://app.example.com/v1/data   # expect 200 + payload shape
+```
+
+**The rule**: a chain is only as real as its least-verified link. The badge reports a step was *attempted*; only a probe confirms the *downstream state*. (See LESSONS Lesson 11.)
+
+---
+
+## 16. Diagnose at the Layer That Actually Failed
+
+### Problem: Right Symptom, Wrong Layer
+
+A binary upload returned `403`. The frontend showed "permission denied," and a full session went into app/auth code. The real rejecter was a WAF body-size rule returning an nginx HTML page; the app logged zero requests. Same family, other sessions: a model swap threw on every call (the new family rejected a `temperature` param the old one accepted -- an *access* check had passed, a *request-compatibility* check had never run); a deploy kept targeting the old account because an *environment-scoped* CD variable silently overrode the *repo-scoped* one; a visual-regression harness kept "passing" stale output because a build mode was incompatible with the harness server and reused a cached prerender.
+
+### Fix: Identify the Rejecting Layer by Its Signature Before Theorising
+
+```
+403 with an HTML error page + app logged nothing  -> gateway / WAF / proxy, not the app
+403 with app JSON                                 -> the app's authz
+Throws right after a model/provider swap          -> request-param compatibility, not access
+                                                     (run ONE real end-to-end call after any swap)
+Deploy targets the wrong place despite a repo var -> an environment-scoped var of the same name
+                                                     overrides it; update + verify which one is read
+Harness shows stale output after a confirmed change-> build-mode / cache mismatch, not the change;
+                                                     force a faithful regen before trusting pass/fail
+```
+
+Map distinct upstream rejections to distinct user-facing messages instead of collapsing every `403`/failure to "permission denied." Naming the layer turns a multi-hour hunt into a one-minute check.
+
+---
+
+## 17. Driving PRs Through a Bot-Reviewed, Protected main
+
+### Problem: "Needs --admin" on an All-Green PR
+
+CI is green, but `gh pr merge` refuses and asks for `--admin`. The instinct is "a check is missing." It usually isn't -- it's the conversation-resolution gate: the protected branch requires every review thread *resolved*, and bot reviewers leave threads, not approvals.
+
+### Fix: Resolve Threads via GraphQL, Don't --admin Past Them
+
+```bash
+# Each addressed thread needs an explicit resolve. Loop per thread ID --
+# concatenating IDs returns NOT_FOUND.
+gh api graphql -f query='
+{ repository(owner:"O",name:"R"){ pullRequest(number:N){
+    reviewThreads(first:100){ nodes { id isResolved } } } } }' \
+| jq -r '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not) | .id' \
+| while read -r tid; do
+    gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t="$tid"
+  done
+gh pr merge N --squash --delete-branch     # now passes without --admin
+```
+
+### And: Bots COMMENT, They Don't APPROVE
+
+A solo-author + bots topology never receives a human `APPROVED`. Treat **effective approval** = CI green AND no unresolved HIGH/sec-HIGH on the latest commit from any bot reviewer AND every bot thread resolved. Then rebase + merge autonomously -- but always `--force-with-lease` (never bare `--force` except on a provably solo-owned branch where lease rejects on a stale tracking ref), and still pause to ask on multi-author branches, non-trivial conflicts, or a non-`main` base.
+
+When even the merge git-ops fail (a flaky SSH agent, a credential-helper timeout), merge through the API instead of the local checkout:
+
+```bash
+gh api -X PUT repos/O/R/pulls/N/merge -f merge_method=squash -f sha="$HEAD_SHA"
+```
+
+(Pairs with LESSONS Lesson 9 -- the PR, not the working tree, is the durable unit of state.)
