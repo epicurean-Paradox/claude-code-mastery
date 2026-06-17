@@ -335,3 +335,113 @@ And a standing check: when a process doc assumes an enforcement substrate (branc
 ### Generalisable pattern
 
 Documentation describes intent; it does not enforce it. Any policy that *could* be enforced by the platform but is not is one slip from being bypassed silently. Periodically reconcile the written process against the actual configuration, and when you wire the enforcement, shape it to your real review topology -- the wrong required check (path-filtered, or a human approval a solo author cannot give) converts "protected" into "permanently blocked".
+
+---
+
+## Lesson 11 -- The green badge is not the outcome: verify every gate in the chain
+
+### What happened
+
+A single meta-failure recurred in many disguises over one project's deploy-heavy phase. Each time, an upstream signal went green and the downstream state was assumed to follow -- and didn't:
+
+- `git push` exited 0, but `git push -u origin <branch>` (bare-name form) had silently no-op'd in that environment; the branch never reached the remote. A later prune deleted the only copy of the commit.
+- A PR showed **MERGED** with green CI, but the version on `main` was the *pre-fix* one: a fix commit had failed to push, so a stale tip merged. Found only when the next branch off `main` still had the old code.
+- A merge-queue merge ran CI under a synthetic `merge_group` ref, so the `workflow_run + branches:[main]` deploy trigger never fired. "Merged" was true; "deployed" was false.
+- A deploy succeeded and the source looked correct, but every action button rendered as an empty box for a whole UAT cycle -- the pinned component library's prop contract had changed and the labels dropped to dead DOM attributes. "Built and deployed" was true; "renders" was false.
+- An endpoint existed in the OpenAPI spec, so the feature was marked done -- but the frontend never called it. "Plumbing-complete, product-hollow."
+- An integration was declared live because a no-auth probe returned `401`. An authenticated probe returned `502` every time: the upstream fetch dropped a path prefix. The `401` proved routing + auth, nothing about the data path.
+
+### What was wrong with the response
+
+Each step in a chain (push -> remote -> merge -> deploy -> render -> wire -> serve data) was trusted to imply the next. A green signal at gate N was read as proof of the state at gate N+1. The verification that *would* have caught each miss was cheap and specific -- and skipped.
+
+### What changed in the system
+
+A standing rule: **every state transition gets its own ground-truth probe; never infer a downstream state from an upstream signal.**
+
+> | Claim | The probe that actually confirms it |
+> |---|---|
+> | "Pushed" | `git ls-remote` / PR `headRefOid` equals local HEAD -- not a clean `push` exit |
+> | "My fix is in main" | `git show origin/main:<path>` contains the fix token -- not the MERGED badge |
+> | "Merged, therefore deployed" | a deploy run was actually created and succeeded |
+> | "Deployed, therefore working" | the live surface renders / responds, observed -- not a green build |
+> | "Endpoint exists, therefore done" | a client actually calls it (wiring is a separate axis) |
+> | "401 on no-auth, therefore live" | authed + valid input -> 200 + expected payload shape |
+
+This extends the Ground Truth pillar from "verify your *claims*" to "verify each *state transition*." A chain is only as real as its least-verified link.
+
+### Generalisable pattern
+
+A pipeline of gates fails silently at whichever gate nobody probed. The badge, the green check, the MERGED label, the successful build are *upstream* signals -- they report that a step was *attempted*, not that the *downstream state* now holds. Each "therefore" between two gates is an unverified assumption. Cheap, specific probes (one `ls-remote`, one `curl`, one `git show`) convert each assumption into a fact; skipping them is how a fully-green pipeline ships nothing.
+
+---
+
+## Lesson 12 -- Trust a subagent's "what is wired", verify its "what is broken"
+
+### What happened
+
+A multi-agent audit read the codebase and reported that a knowledge base was empty and every answer ungrounded -- inferred from "no cron job exists and no log stream shows ingestion." A direct query against the live store showed it populated, with citations. The agent's *source-derived* claim ("no cron is wired") was correct; its *runtime-state* claim ("therefore the data isn't there") was wrong.
+
+### What was wrong with the response
+
+The audit's findings were accepted wholesale. But a subagent reading source can only see *what is wired*; it cannot see *what is true at runtime* unless it actually queried the running system. "No cron + no log" is evidence about wiring, not proof about state. The two were conflated, and a confident-but-wrong conclusion nearly drove unnecessary remediation.
+
+### What changed in the system
+
+A trust boundary for delegated findings:
+
+> A subagent's claims about **what is wired** (which functions exist, what calls what, which routes are declared) are reliable -- they come from reading source. Its claims about **what is empty / broken / missing at runtime** are hypotheses until verified against live state: query the DB, hit the endpoint, read the log. "No cron exists" is not "the table is empty"; "the view-model lacks the field" is not "the data isn't captured."
+
+This refines the Ground Truth pillar specifically for fan-out work: the wiring conclusions can be trusted; the state conclusions get one live probe before they drive action.
+
+### Generalisable pattern
+
+Delegation does not lift the ground-truth requirement -- it relocates it. A reader of source is authoritative about structure and silent (at best, inferential) about runtime. When a delegated finding crosses from "this is how it's wired" to "this is therefore the state of the system," that crossing is exactly where you owe a live check before acting on it.
+
+---
+
+## Lesson 13 -- A migrated secret is still a leaked secret
+
+### What happened
+
+Credentials were found sitting in a cloud-synced folder. The cleanup moved them into a password manager / secrets store and shredded the originals. The work was reported as remediated. It wasn't: every one of those values was still live at its issuer (AWS, GCP, an OAuth app, a GitHub PAT) and had already been exposed.
+
+### What was wrong with the response
+
+"Migrated to a vault" was treated as "secured." Moving a secret only changes *where it lives*; it does nothing about the fact that the value already leaked. The exposure window doesn't close until the value is rotated at the source and the old one revoked.
+
+### What changed in the system
+
+A two-state model for any exposed credential:
+
+> "Migrated" and "rotated" are separate states, and only the second one closes the exposure. When a secret has been in any exposed location (a synced folder, a commit, a log, a chat transcript), moving or deleting the copy is not remediation. Rotate the value at the issuer, revoke the old one, then confirm the new value works. Track the two states independently; a secret can be "in the vault" and still compromised.
+
+### Generalisable pattern
+
+Confidentiality is a property of the *value*, not its current *location*. Any operation that relocates or hides an already-exposed secret (vaulting it, scrubbing git history, deleting the file) addresses future exposure of that copy and nothing about the leak that already happened. The only operation that restores confidentiality is rotation at the issuer. Treat "where the secret lives now" and "has the leaked value been invalidated" as two independent checkboxes.
+
+---
+
+## Lesson 14 -- The dev server you backgrounded is still running
+
+### What happened
+
+While diagnosing a test timeout, a `next dev` server was started as a backgrounded process. The harness stops tracking a backgrounded process after the turn ends, so nothing reaped it. Turbopack rooted itself at the top of a monorepo and walked the entire tree; the orphaned server grew past 65 GB of RAM and forced an emergency laptop reboot.
+
+The same class of footgun showed up elsewhere in the same environment: a `perl -0pi` mass-edit silently corrupted multibyte characters (em-dashes, section signs) into mojibake across source files; `expanduser("~")` resolved to the current working directory instead of home; a shell intermittently duplicated and truncated stdout; macOS NFD-normalised filenames broke a name-mapping step.
+
+### What was wrong with the response
+
+A file-watching dev server (`next dev`, `vite`, `nodemon`, `tsc --watch`) is not a fire-and-forget command. Backgrounding it hands it to a runtime that won't reap it, and a watcher rooted at the wrong directory consumes resources without bound. Similarly, stream editors (`sed`, `perl -pi`) carry no UTF-8 guarantee, and shell-environment assumptions (`~` expansion, reliable stdout, ASCII filenames) are not safe defaults in an agent shell.
+
+### What changed in the system
+
+A set of environment / tooling rules:
+
+> - **Never** start a file-watching dev server as a tracked background process. To probe one, start + curl + kill in a single compound command, or let the test runner own the server lifecycle. Sweep `pgrep` / `docker ps` at session end.
+> - **Never** use `sed` / `perl -0pi` for source edits that may contain non-ASCII; use the structured edit tool, which preserves UTF-8.
+> - Prefer **literal absolute paths**; `~` / `expanduser` can resolve to the cwd. When stdout is duplicated or truncated, write to a temp file and read it back. NFC-normalise macOS filenames before matching.
+
+### Generalisable pattern
+
+An agent shell is not an interactive terminal with a human watching `htop`. Processes you background outlive your attention; stream tools you reach for by reflex have no encoding safety; environment primitives you assume (`~`, stdout, filename encoding) are not guaranteed. The cost of a wrong assumption is unbounded (a 65 GB orphan, a corrupted file) and silent until it isn't. Treat process lifecycle and encoding as things you manage explicitly, not things the environment manages for you.
