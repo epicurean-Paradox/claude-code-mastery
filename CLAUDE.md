@@ -163,6 +163,17 @@ This is distinct from the response gate on review comments: that's about owing t
 
 ---
 
+## The lesson loop is enforced, not hoped (LEDGER.md + hooks/)
+
+Distillation and recall do not close the loop on their own -- the failure mode of Lesson 17. Two ends are now mechanized:
+
+- **Enforcement (write time).** `hooks/prototype-scaffold-guard.sh` is a PreToolUse hook (matcher `Write|Edit|MultiEdit`) that blocks design-prototype scaffold (a state-gallery stepper, reviewer nav hints, `StageLabel` banners) from landing in first-party frontend source -- the Lesson 3 violation, now failing loud instead of shipping.
+- **Detection (session start).** `hooks/lesson-loop-audit.sh` is a SessionStart hook that greps the live frontend tree for scaffold already shipped and counts the SOFT (ungated) rows in `LEDGER.md`, so re-violations and open defects surface without a human noticing.
+
+`LEDGER.md` is the spine: every lesson is classified HARD / SEMI / SOFT by *how it is enforced*. A LESSONS entry with no ledger row, or a SOFT row with no named "next gate", is itself a Lesson-17 open defect. Install: copy `hooks/*.sh` to `~/.claude/hooks/` and register them in `~/.claude/settings.json` under `PreToolUse` (`Write|Edit|MultiEdit`) and `SessionStart`. Not every lesson can or should be HARD -- judgment-heavy ones (L11/L15/L16) get a forced checklist plus the detection audit; the ledger makes that choice explicit rather than pretending all lessons are gateable.
+
+---
+
 ## Environment & Tooling Footguns
 
 An agent shell is not an interactive terminal with a human watching resource usage. A few defaults are unsafe:
