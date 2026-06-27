@@ -765,3 +765,33 @@ gh api -X PUT repos/O/R/pulls/N/merge -f merge_method=squash -f sha="$HEAD_SHA"
 ```
 
 (Pairs with LESSONS Lesson 9 -- the PR, not the working tree, is the durable unit of state.)
+
+---
+
+## 18. The False-DONE the Test Defended
+
+### Problem: A "DONE" Backed by a Test That Asserts the Bug
+
+A plan row read: *FI-3 DONE -- conversation-first entry, NO prefilled dashboard; submitting a question sets the sentinel, then propose_workspace, then a human Create click, then the dashboard.* It cited an end-to-end test as proof.
+
+The shipped code did the opposite. On submit, `page.tsx:234-240` set `activeWorkspaceId` to a truthy sentinel (`"unsaved"`); the render gate at `:277` checked `=== null`; `workspace-view.ts:16-23` floored the view at `'dashboard'`. So the live organisation dashboard rendered the instant a question was submitted -- before any proposal or Create click. The operator had flagged exactly this, three times across three weeks.
+
+The decisive part: the cited test, `chat-entry.realdata.spec.ts:57-64`, **asserted the dashboard is visible right after submit**. It was green. It had been written from the observed behaviour, so it pinned the regression as the contract, and the green check propagated into the plan's DONE.
+
+### Fix: Read the Assertion Against Intent, Not Against the Code
+
+```bash
+# Don't accept "the e2e is green" as "the increment is done."
+# Open the test the claim rests on and compare its assertions to the SPEC.
+rg -n "expect|toHaveText|toBeVisible" frontend/e2e/realdata/chat-entry.realdata.spec.ts
+# Ask: does this assert the INTENDED behaviour, or the SHIPPED behaviour?
+# If it mirrors shipped output, a passing run certifies the regression.
+```
+
+The remedy was structural: correct the plan row from DONE to PARTIAL with the file:line evidence, open a Gap for the entry regression, and rewrite the test to assert the intended flow (prompt/pending state on submit; dashboard only after a proposal+Create) so the suite would fail on the regression instead of defending it.
+
+### Why It Was Invisible
+
+The gate was green, so nothing drew attention to it. Green is the camouflage. The only thing that surfaces a test asserting the wrong behaviour is a human or agent reading the assertion against the spec -- which is why "has a passing test" and "does the intended thing" must be checked as two separate claims.
+
+(Pairs with LESSONS Lesson 16 -- a green test can certify the wrong behaviour -- and Lesson 11 -- the badge is not the outcome.)

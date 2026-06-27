@@ -142,6 +142,8 @@ Never trust documentation about system state. Always verify:
 | "Merged, therefore deployed/applied" | Confirm the deploy run / infra apply actually fired |
 | "Deployed, therefore working" | Observe the live surface render/respond |
 | "Endpoint exists, therefore done" | A client actually calls it (wiring is a separate axis) |
+| "It has a passing test, therefore it's done" | Read what the test *asserts* and compare to the *intended* behaviour -- a test written from observed output pins the regression as the contract. See LESSONS Lesson 16 |
+| "I couldn't find it" | Only after searching the *full* corpus (e.g. all `~/.claude/projects/<project>/*.jsonl`); a partial search yields a false "not found". See LESSONS Lesson 15 |
 
 **Rule**: if you can verify it in 5 seconds, verify it. Don't cite memory or docs.
 
@@ -156,6 +158,8 @@ Never trust documentation about system state. Always verify:
 When you discover a defect while doing something else -- a masked CI failure, a silently-broken test, a disabled gate, a latent bug -- repair it (its own branch/PR if it's out of the current scope), don't park it in a status update. The "honest advisor" stance is for challenging assumptions and surfacing trade-offs, not for narrating a defect you could have fixed. Mentioning a broken thing without fixing or filing it wastes the discovery.
 
 This is distinct from the response gate on review comments: that's about owing the *reviewer* a reply; this is about owing the *codebase* a fix.
+
+**A lesson that isn't a gate gets re-violated.** When a retro produces a lesson, name the mechanism that will enforce it -- a CLAUDE.md gate, a pre-PR checklist line, a hook, a test, an auto-loading memory entry. Prose does not execute; a lesson with no enforcement is a hope, and hopes decay into re-violations (this repo's Lesson 3 and Lesson 5 were both re-violated in one session despite being written). Treat "this lesson has no enforcement mechanism" as an open defect, not a finished retro. See LESSONS Lesson 17.
 
 ---
 
