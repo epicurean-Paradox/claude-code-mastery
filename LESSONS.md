@@ -445,3 +445,63 @@ A set of environment / tooling rules:
 ### Generalisable pattern
 
 An agent shell is not an interactive terminal with a human watching `htop`. Processes you background outlive your attention; stream tools you reach for by reflex have no encoding safety; environment primitives you assume (`~`, stdout, filename encoding) are not guaranteed. The cost of a wrong assumption is unbounded (a 65 GB orphan, a corrupted file) and silent until it isn't. Treat process lifecycle and encoding as things you manage explicitly, not things the environment manages for you.
+
+---
+
+## Lesson 15 -- Accuracy outranks token-frugality on a retrieval request
+
+### What happened
+
+The operator asked whether two UX observations from a past session -- a navigation inconsistency, and a default workspace loading on a brand-new chat -- had been lost. The assistant grepped five transcript files, did not find them, and reported they were "either said in a form the search didn't catch, or not captured at all." The operator pushed back directly: there were dozens of browsable chat windows; concluding "not found" from a partial search was a token-conservation reflex, and *"that must not rule over a request for accuracy."* An exhaustive sweep of all 148 transcripts from the prior week then surfaced both observations verbatim across two earlier sessions -- and in one of them the assistant had explicitly agreed with the critique and specified the fix.
+
+### What was wrong with the response
+
+The assistant terminated a search early and converted "I have not found it yet" into "it was not captured." On a request the operator had framed as accuracy-critical, an unprompted frugality frame produced a false negative -- the most dangerous kind, because it is delivered with the confidence of a finding.
+
+### What changed in the system
+
+Recovery and verification tasks search the full corpus before reporting absence. Conversation transcripts are on disk at `~/.claude/projects/<project>/*.jsonl` (top-level files are sessions; subdirectories are subagent runs) and are greppable -- "I cannot see prior conversations" is false. Reports state the scope searched, and absence is asserted only after the full sweep.
+
+### Generalisable pattern
+
+"Couldn't find it" after a bounded search is a rationalisation, not a finding. Distinguish "searched everything, genuinely absent" (a fact) from "searched a subset, inferred absence" (a guess wearing a fact's clothes). Compute and tokens are neutral resources; the human owns the cost/accuracy tradeoff on a given request, and never gets to have it silently decided for them. When the ask is "did this happen" or "find what I said," default to exhaustive.
+
+---
+
+## Lesson 16 -- A green test can certify the wrong behaviour
+
+### What happened
+
+A project plan marked a feature increment DONE with the guarantee "no prefilled dashboard," and cited an end-to-end test as the proof. Reading the test showed it asserted the opposite: that the dashboard renders the instant a question is submitted -- the exact regression the operator had flagged. The passing test had codified the bug as the contract, and the green check had been read as "done correctly."
+
+### What was wrong with the response
+
+"The test passes" was treated as "the behaviour is correct." A test authored from observed output backfills whatever the code currently does into an assertion; running green afterwards certifies the regression rather than catching it. The plan's DONE status inherited that false confidence.
+
+### What changed in the system
+
+This extends Lesson 11 (the badge is not the outcome) down to the test layer. Before a green test is accepted as evidence that an increment is done, read what it asserts and compare it to the *intended* behaviour in the spec -- not to the *shipped* behaviour the test may simply be mirroring. A test proves the behaviour is pinned; it never proves the pinned behaviour is the one that was wanted.
+
+### Generalisable pattern
+
+"Has a passing test" and "does the intended thing" are independent claims. The failure is invisible precisely because the gate is green, so green cannot be the thing that clears it: a human or agent has to read the assertion against intent. A suite is a vise, not a judge -- it holds whatever you clamped, correct or not.
+
+---
+
+## Lesson 17 -- A lesson that isn't a gate gets re-violated
+
+### What happened
+
+In a single session the assistant re-violated two lessons already written in this repository. It shipped a design prototype's scaffold (a multi-step "PAGE 0 OF 3" stepper) into production -- the exact failure of Lesson 3. And it failed to write a design decision to memory, so the decision evaporated and had to be recovered from raw transcripts three weeks later -- the exact failure of Lesson 5. Both lessons were canonical, both were ignored, and the second observation had in fact been raised by the operator three separate times.
+
+### What was wrong with the response
+
+The lessons existed as prose, and prose does not execute. Nothing converted either lesson into a check that fires at the moment of violation -- a CLAUDE.md gate, a pre-PR checklist line, a hook, a test, an auto-loading memory entry. The knowledge sat inert in a file a given session may never re-read, while the behaviour it warned against recurred.
+
+### What changed in the system
+
+When a lesson is written, it must name the mechanism that will enforce it. Lesson 3 had already produced a pre-port checklist; the residual gap was that nothing made the checklist actually run. The remedy is to bind each lesson to an active gate rather than to a paragraph -- and to treat "this lesson has no enforcement mechanism" as an open defect, not a finished retro.
+
+### Generalisable pattern
+
+The deliverable of a retrospective is the gate it produces, not the paragraph it writes. A lesson with no enforcement is a hope, and hopes decay into re-violations. Measure a lesson by whether something now fails loudly when it is broken; if nothing does, the lesson is not yet real -- it is a note about a real thing that has not been built.
