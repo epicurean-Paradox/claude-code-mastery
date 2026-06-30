@@ -110,7 +110,7 @@ L2's ledger row had named its next gate ("a 'reproduced locally?' checklist line
 
 - A Ground-Truth row for the causal claim-type (the one row the table was missing -- it guarded state, never causation).
 - The `[verified:]` / `[hypothesis:]` forcing format on diagnoses.
-- `hooks/diagnosis-evidence-audit.sh` -- detection that flags an untagged causal/external diagnosis in a transcript, self-tested against this exact "527K is the 242 snapshot" turn.
+- `hooks/evidence-audit.sh` -- detection that flags an untagged causal/external diagnosis in a transcript, self-tested against this exact "527K is the 242 snapshot" turn.
 - Ledger row 2 promoted SOFT -> SEMI + HARD-detection.
 
 ### Generalisable pattern (restated)

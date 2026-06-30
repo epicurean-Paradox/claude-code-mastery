@@ -1,24 +1,31 @@
 #!/usr/bin/env python3
-"""Detection engine for two assertion classes that, like Lesson 2, are claims the
-state-checks miss when stated without a probe:
+"""Unified evidence-audit engine -- one transcript walker, three rule families.
+Replaces the former diagnosis-evidence-audit + claim-evidence-audit pair (same
+detection, half the maintenance surface).
 
-  * ABSENCE  (Lessons 12 + 15) -- "couldn't find X", "no such cron", "the table
-    is empty", "doesn't exist". A negative result asserted without a full search
-    (L15) or adopted from a subagent's "empty/missing" without an independent
-    probe (L12). "No cron exists" is not "the table is empty."
-  * STATE-CHAIN (Lesson 11) -- a downstream state inferred from an upstream
-    signal: "merged so it's live", "pushed therefore in main", "deployed so it
-    works". The green badge is not the outcome.
+Families:
+  causal      (Lesson 2)        -- a causal connector co-occurring with an
+                                    external/uncertainty suspect, stated as fact
+                                    ("the difference is a snapshot", "242 vs local").
+  absence     (Lessons 12 + 15) -- a negative asserted without a search
+                                    ("couldn't find", "no such cron", "empty").
+  state-chain (Lesson 11)       -- a downstream state inferred from an upstream
+                                    signal ("merged so it's live").
 
-A claim is flagged only when its turn shows NO probe tool-call (grep/find/Read/
-psql/git show/ls-remote/curl/gh ...) and the sentence carries no evidence tag
-([verified:]/[hypothesis:]/[searched:]). The per-turn probe check keeps the
-signal high -- a claim made right after a real search is left alone.
-
-Heuristic, like its sibling diagnosis-evidence-audit: catches the high-signal
-shape, accepts a miss rate, exists to make the re-violation visible.
+Suppression differs by family -- this is why the families stay distinct even
+though the plumbing is shared:
+  - causal     -> suppressed ONLY by an inline evidence tag or an inline probe
+                  verb in the SAME sentence. NOT by a turn-level probe: the L2
+                  failure ("the 527K is the 242 snapshot") was stated in a turn
+                  full of psql calls that probed the WRONG source, so turn-level
+                  suppression would miss the exact case the family exists for.
+  - absence /
+    state-chain -> suppressed by an inline tag OR any probe tool-call in the same
+                   turn (a "couldn't find" right after a grep is fine).
 
 Modes (argv[1]): --file <path> | --stop (stdin Stop JSON) | --digest <paths...>
+Heuristic by design (judgment-heavy class, cf. ledger L11/L15/L16): makes
+re-violations visible, does not prove correctness.
 """
 
 import json
@@ -31,6 +38,29 @@ TAG = re.compile(
     r"source|searched)\b",
     re.I,
 )
+
+# --- causal (Lesson 2) ---
+CONNECTOR = re.compile(
+    r"\b(because|due to|caused by|the reason|root cause|explained by|"
+    r"comes down to|boils down to|attributable to|the difference is|"
+    r"the gap is|that'?s (?:just )?(?:a|the|because)|is (?:just )?(?:a|the))\b",
+    re.I,
+)
+SUSPECT = re.compile(
+    r"\b(snapshot|stale(?:ness)?|deploy(?:ed|ment)?|cache[d]?|timing|"
+    r"race(?: condition)?|environment|env diff|proxy|version skew|drift|"
+    r"out of sync|not a (?:code )?bug|data[- ]snapshot|cloud[- ]vs[- ]local|"
+    r"local[- ]vs[- ]cloud|242|different snapshot|point[- ]in[- ]time)\b",
+    re.I,
+)
+INLINE_PROBE = re.compile(
+    r"\b(queried|query the|ran the|pulled the|fetched the|read the source|"
+    r"checked the (?:source|report|table|db)|select |count\(|"
+    r"analytics/reports|sf\.|psql|git show origin|ls-remote)\b",
+    re.I,
+)
+
+# --- absence (Lessons 12 + 15) ---
 ABSENCE = re.compile(
     r"(could ?n'?t find|not found|no (?:record|results?|trace|sign|cron|rows?|"
     r"match(?:es)?|entry|entries|reference)|nothing (?:found|matched|there)|"
@@ -39,6 +69,8 @@ ABSENCE = re.compile(
     r"there (?:is|are) no\b)",
     re.I,
 )
+
+# --- state-chain (Lesson 11) ---
 STATE_CHAIN = re.compile(
     r"\b(pushed|merged|deployed|applied|built|green|passed|the badge)\b"
     r"[^.\n]{0,45}\b(so|therefore|which means|hence|means it'?s?|=>|->)\b"
@@ -46,13 +78,19 @@ STATE_CHAIN = re.compile(
     r"done|shipped|applied|landed|in main|complete)\b",
     re.I,
 )
+
+# --- turn-level probe detection (suppresses absence/state, not causal) ---
 PROBE_BASH = re.compile(
     r"\b(grep|rg |ripgrep|find |fd |ls |psql|select |count\(|git show|"
     r"git ls-remote|git rev-parse|git log|curl|gh api|gh run|gh pr |cat |jq |"
-    r"analytics/reports|sf\.|\\d |information_schema)\b",
+    r"analytics/reports|sf\.|information_schema)\b",
     re.I,
 )
 PROBE_TOOLS = {"Grep", "Glob", "Read", "WebFetch", "WebSearch"}
+
+
+def _snip(sent):
+    return re.sub(r"\s+", " ", sent)[:160]
 
 
 def sentences(text):
@@ -75,16 +113,14 @@ def _content_blocks(ev):
 
 def turns(path):
     """Yield (turn_idx, assistant_text, had_probe) per assistant turn. had_probe
-    is True if any probe tool-call appeared in the turn (assistant tool_use or a
-    Bash command matching PROBE_BASH). Falls back to a single plain-text blob."""
+    is True if any probe tool-call appeared in the turn. Falls back to a single
+    plain-text blob for a non-JSON file."""
     turn = 0
     saw_json = False
     cur_text, cur_probe = [], False
 
     def flush():
-        if cur_text:
-            return (turn, "\n".join(cur_text), cur_probe)
-        return None
+        return (turn, "\n".join(cur_text), cur_probe) if cur_text else None
 
     try:
         with open(path, encoding="utf-8") as fh:
@@ -101,18 +137,14 @@ def turns(path):
             continue
         saw_json = True
         role = ev.get("role") or ev.get("message", {}).get("role")
-        is_user = role == "user" or ev.get("type") == "user"
-        is_asst = role == "assistant" or ev.get("type") == "assistant"
-        if is_user:
+        if role == "user" or ev.get("type") == "user":
             out = flush()
             if out:
                 yield out
             turn += 1
             cur_text, cur_probe = [], False
-            # a tool_result lives in a user event; its presence doesn't probe,
-            # but the originating tool_use (assistant) was already counted.
             continue
-        if is_asst:
+        if role == "assistant" or ev.get("type") == "assistant":
             for b in _content_blocks(ev):
                 if not isinstance(b, dict):
                     if isinstance(b, str):
@@ -146,19 +178,32 @@ def scan(path, last_only=False):
         items = items[-1:]
     flags = []
     for turn, text, had_probe in items:
-        if had_probe:
-            continue
         for sent in sentences(text):
             if TAG.search(sent):
                 continue
-            kind = None
+            # causal: inline-only suppression (turn-level probe does NOT clear it)
+            if CONNECTOR.search(sent) and SUSPECT.search(sent):
+                if not INLINE_PROBE.search(sent):
+                    flags.append((turn, "causal", _snip(sent)))
+                continue
+            # absence / state-chain: any probe this turn clears them
+            if had_probe:
+                continue
             if ABSENCE.search(sent):
-                kind = "absence"
+                flags.append((turn, "absence", _snip(sent)))
             elif STATE_CHAIN.search(sent):
-                kind = "state-chain"
-            if kind:
-                flags.append((turn, kind, re.sub(r"\s+", " ", sent)[:160]))
+                flags.append((turn, "state-chain", _snip(sent)))
     return flags
+
+
+_STOP_REASON = (
+    "evidence-audit (Lessons 2/11/12/15): your last message makes {n} unverified "
+    "claim(s) -- {snips}. Before finishing: probe the source that adjudicates it "
+    "(the upstream report/log, a full corpus search, the downstream state itself -- "
+    "not an upstream badge), then tag [verified: <probe>] / [hypothesis: <probe>] / "
+    "[searched: <scope>], or drop the claim. A claim that fits the evidence is not "
+    "one that has been shown. See ~/claude-code-mastery LESSONS Lessons 2, 11, 12, 15."
+)
 
 
 def main():
@@ -176,32 +221,28 @@ def main():
         except (json.JSONDecodeError, ValueError):
             sys.exit(0)
         if data.get("stop_hook_active"):
-            sys.exit(0)
+            sys.exit(0)  # loop guard
         tp = data.get("transcript_path", "")
         if not tp or not os.path.exists(tp):
             sys.exit(0)
         flags = scan(tp, last_only=True)
         if flags:
             snips = "; ".join(f"({k}) {s}" for _, k, s in flags[:4])
-            reason = (
-                "claim-evidence-audit (Lessons 11/12/15): your last message makes "
-                f"{len(flags)} absence/state claim(s) with no probe this turn and no "
-                f"tag -- {snips}. Before finishing: for an absence claim, search the "
-                "FULL corpus (and verify a subagent's 'empty/missing' against live "
-                "state); for a state claim, probe the downstream state itself "
-                "(ls-remote / git show / the live surface), not the upstream badge. "
-                "Then tag [verified: <probe>] or [searched: <scope>]. See "
-                "~/claude-code-mastery LESSONS Lessons 11, 12, 15."
+            print(
+                json.dumps(
+                    {
+                        "decision": "block",
+                        "reason": _STOP_REASON.format(n=len(flags), snips=snips),
+                    }
+                )
             )
-            print(json.dumps({"decision": "block", "reason": reason}))
         sys.exit(0)
 
+    # --digest (SessionStart)
     for f in sys.argv[2:]:
         flags = scan(f)
         if flags:
-            print(
-                f"  {len(flags)} untagged absence/state claim(s) in {os.path.basename(f)}"
-            )
+            print(f"  {len(flags)} unverified claim(s) in {os.path.basename(f)}")
             for _, kind, s in flags[:3]:
                 print(f"    > ({kind}) {s}")
     sys.exit(0)

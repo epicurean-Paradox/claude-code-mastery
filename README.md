@@ -62,20 +62,7 @@ The continuation session sees this as its first instruction and orients itself b
 
 ### 3. Session Decay Prevention
 
-Even within a single session, Claude's adherence to your rules degrades after many turns. It stops checking docs, drifts from the architecture, and starts taking shortcuts.
-
-**The fix**: add a periodic reset trigger:
-
-```markdown
-## Session Decay Prevention
-
-Every 10 responses OR when switching tasks:
-1. Re-read PROJECT_PLAN.md current phase
-2. Verify alignment with stated priorities
-3. If drifted, state: "Refocusing on [current phase] per project plan"
-```
-
-This creates a self-correcting loop. Claude audits itself instead of silently degrading.
+Adherence degrades over a long session, but "re-read the plan every 10 responses" is unenforceable: nothing fires at response 10, so the model self-polices using the very attention that context pressure is eroding. By Lesson 17 that's an open defect, not a mechanism, so it was removed. The real cause is context pressure and **in-session compaction** silently dropping early instructions; the real fix is durability, not willpower. Keep rules in CLAUDE.md so they survive compaction (Pillar 1), and steer the compactor with a Summary-instructions block (see the compaction-survival guidance). Re-injection survives 50 turns; a self-policing reminder does not.
 
 ### 4. Skill-Driven Workflows
 
@@ -155,9 +142,7 @@ The audit IS the work. Plan PRs are a legitimate output of the autonomous loop, 
 
 ### 9. FastAPI Override Request-Injection Footgun
 
-When overriding a FastAPI dependency that takes `request: Request`, the type annotation **must** use a module-scope canonical `from fastapi import Request`. Aliased or function-local imports trip FastAPI's signature introspector → 422 with `loc:[query, request]` instead of an injected Request.
-
-Generalizes to any framework doing signature introspection on overrides.
+A stack-specific footgun, kept numbered for cross-references: overriding a FastAPI dependency that takes `request: Request` requires a module-scope canonical `from fastapi import Request` — aliased or function-local imports trip the name-based signature introspector into a 422. Generalizes to any framework introspecting override signatures. Full write-up: [EXAMPLES.md §9](EXAMPLES.md).
 
 ### 10. The Test-Suite Inclusion Gate
 
@@ -195,11 +180,7 @@ Build the inspection harness *at the same time* as the IaC: a `inspect.yml` manu
 
 ### 14. Auth Surface Separation
 
-Same vendor, two tokens. The product runtime uses cloud-native IAM (AWS Bedrock, Azure OpenAI, GCP service accounts). The CI / dev tooling uses the vendor's hosted-action OAuth or API key. Different network paths, different cost centres, different audit trails — but the natural assumption ("we use vendor X" = "one auth path") sends debuggers to the wrong file every time.
-
-Real instance: CI's auto-review job failed with *"ANTHROPIC_API_KEY: empty."* The product uses Bedrock — no Anthropic key needed anywhere in the deployed stack. The failure was upstream-action-internal, not auth. The intuition that "Bedrock everywhere = no keys anywhere" delayed the right diagnosis by an hour.
-
-Codify the two surfaces explicitly in CLAUDE.md (which IAM grant for product, which secret for CI). When a vendor-auth bug surfaces, identify the surface *first*: failure in CI = check the CI secret; failure in production = check the IAM grant. Pairs with Pattern 7 (verify bot suggestions before applying — the bot may be flagging the wrong surface).
+Same vendor, two tokens: the product runtime uses cloud-native IAM (Bedrock / Azure OpenAI / GCP service accounts), while CI and dev tooling use the vendor's hosted-action OAuth or API key — different network paths, cost centres, and audit trails. The "one vendor = one auth path" assumption sends debuggers to the wrong file: a CI `ANTHROPIC_API_KEY: empty` failure has nothing to do with a Bedrock-only product stack. Codify both surfaces in CLAUDE.md and identify the surface first — CI failure → CI secret, production failure → IAM grant.
 
 ### 15. The Vendored-Artifact Carve-Out
 
@@ -211,11 +192,7 @@ Carved findings get **flag-and-bind**, not a fix-in-place: (a) reply on the PR, 
 
 ### 16. CI-Gate Right-Sizing
 
-Flipping a check to a *blocking, per-PR* gate is a cost decision, not just a correctness one. A gate that is too slow or too broad gets fought, not respected — you spend more PRs fighting its config than it ever saves.
-
-Real instance: a schemathesis contract sweep flipped to a per-PR gate ran ~40 min × 3 Python versions on **every** PR (including docs-only). It took five PRs of ceiling-bumps before the actual fix: **path-filter** (run only when the guarded surface changes) + **single-version** (the contract is version-invariant) + **lean install** (the heavy ML stack it never imported was the timeout cause) + **bounded fuzz budget** (`max_examples` 25→8). Same coverage, ~9× cheaper, no longer cancels.
-
-Four levers, every blocking gate: filter to the surface it guards; run version-invariant checks once; install only what the check executes; bound any fuzzed budget. Decide all four *before* flipping the gate on.
+Flipping a check to a blocking, per-PR gate is a cost decision, not just a correctness one — a gate too slow or too broad gets fought, not respected (one schemathesis sweep ran ~40 min × 3 versions on every PR until it was fixed). Four levers, all decided *before* you flip it on: filter to the surface it guards, run version-invariant checks once, install only what the check executes, bound any fuzzed budget.
 
 ### 17. Functional Increments ("functional % not code %")
 

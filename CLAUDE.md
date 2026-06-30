@@ -39,23 +39,6 @@ This prevents the cold-start problem where Claude makes assumptions about what t
 
 ---
 
-## Session Decay Prevention
-
-After 10-15 turns, Claude stops checking docs, drifts from architecture, and takes shortcuts. This is not a bug — it's context window pressure.
-
-**Counter-measure**: add a periodic self-audit:
-
-```markdown
-Every 10 responses OR when switching tasks:
-1. Re-read the project plan
-2. Verify current work aligns with stated priorities
-3. If drifted: "Refocusing on [X] per project plan"
-```
-
-Claude will follow this because it appears in every context window refresh. The key is making it a numbered checklist, not prose.
-
----
-
 ## Context Limit Continuity
 
 When a session hits the context limit, Claude generates a summary. Without structure, that summary is useless.
@@ -159,7 +142,7 @@ Never trust documentation about system state. Always verify:
 - `[verified: <probe>]` -- you ran the probe that adjudicates it (queried the upstream source, reproduced in a clean room, read the authoritative log).
 - `[hypothesis: <cheapest probe>]` -- you have not, and here is the one cheap check that would confirm or kill it.
 
-Tagging a real finding is one phrase; tagging a guess `[verified]` is a lie you will not write -- so the honest path (`[hypothesis]`) is also the cheap one. An **untagged** bare external-cause diagnosis is the defect. The forcing function that actually catches this in practice: *before you write the cause, write the evidence line that proves it* -- if you can't, it's a hypothesis. (This is what catches it when a diagnosis goes into external comms; the rule pulls that check earlier, to every causal claim.) Detection backstop: `hooks/diagnosis-evidence-audit.sh` scans transcripts for untagged causal/external diagnoses and surfaces them. See LESSONS Lesson 2 + LEDGER row 2.
+Tagging a real finding is one phrase; tagging a guess `[verified]` is a lie you will not write -- so the honest path (`[hypothesis]`) is also the cheap one. An **untagged** bare external-cause diagnosis is the defect. The forcing function that actually catches this in practice: *before you write the cause, write the evidence line that proves it* -- if you can't, it's a hypothesis. (This is what catches it when a diagnosis goes into external comms; the rule pulls that check earlier, to every causal claim.) Detection backstop: `hooks/evidence-audit.sh` scans transcripts for untagged causal/external diagnoses and surfaces them. See LESSONS Lesson 2 + LEDGER row 2.
 
 ---
 
@@ -180,10 +163,9 @@ Distillation and recall do not close the loop on their own -- the failure mode o
 - **Enforcement (write time).** `hooks/prototype-scaffold-guard.sh` is a PreToolUse hook (matcher `Write|Edit|MultiEdit`) that blocks design-prototype scaffold (a state-gallery stepper, reviewer nav hints, `StageLabel` banners) from landing in first-party frontend source -- the Lesson 3 violation, now failing loud instead of shipping.
 - **Enforcement (call time).** `hooks/dev-server-guard.sh` is a PreToolUse hook (matcher `Bash`) that blocks a file-watching dev server (`next dev` / `vite` / `nodemon` / `tsc --watch` / `*run dev`) launched with `run_in_background` or a trailing `&` -- the Lesson 14 footgun (an unreaped watcher leaked past 65 GB RAM), now failing loud. Foreground start+probe+kill is allowed.
 - **Detection (session start).** `hooks/lesson-loop-audit.sh` is a SessionStart hook that greps the live frontend tree for scaffold already shipped and counts the SOFT (ungated) rows in `LEDGER.md`, so re-violations and open defects surface without a human noticing.
-- **Detection (transcript).** `hooks/diagnosis-evidence-audit.sh` scans recent transcripts for the Lesson-2 shape -- a causal / external-suspect diagnosis ("snapshot", "deploy", "stale", "race", "242 vs local") asserted with no source-of-truth probe and no `[hypothesis:]` tag -- and surfaces it. SessionStart digest by default; also runnable on one file (`<transcript>` arg, exit 1 on a hit) as a Stop hook or in CI. Self-tested in `hooks/test-fixtures/` (flags the real "527K is the 242 snapshot" turn, passes the tagged rewrite).
-- **Detection (transcript).** `hooks/claim-evidence-audit.sh` covers the sibling classes the state-checks miss: **absence** claims (Lessons 12 + 15 -- "couldn't find", "no such cron", "empty") and **state-chain** claims (Lesson 11 -- "merged so it's live"). It flags only when the turn shows no probe tool-call and the claim carries no `[verified:]`/`[searched:]` tag -- the per-turn probe check keeps it from firing on a claim made right after a real search. Same SessionStart / Stop / `--file` modes; self-tested in `hooks/test-fixtures/`.
+- **Detection (transcript).** `hooks/evidence-audit.sh` scans recent transcripts for three claim shapes the state-checks miss: **causal** diagnoses (Lesson 2 -- "snapshot", "deploy", "242 vs local" stated as fact), **absence** claims (Lessons 12 + 15 -- "couldn't find", "no such cron", "empty"), and **state-chain** claims (Lesson 11 -- "merged so it's live"), each flagged only when untagged and unprobed. Suppression differs by family: causal clears only on an inline tag/probe (turn-level probing the *wrong* source was the L2 failure), absence/state clear on any probe that turn. SessionStart digest / Stop hook / `--file` (exit 1) modes; self-tested in `hooks/test-fixtures/` (flags the real "527K is the 242 snapshot" turn, passes the tagged rewrite).
 
-`LEDGER.md` is the spine: every lesson is classified HARD / SEMI / SOFT by *how it is enforced*. A LESSONS entry with no ledger row, or a SOFT row with no named "next gate", is itself a Lesson-17 open defect. Install: copy `hooks/*.sh` **and `hooks/*.py`** (the audit ships as a thin `.sh` dispatcher + a `.py` engine -- both must land together) to `~/.claude/hooks/`, then register in `~/.claude/settings.json`: `prototype-scaffold-guard.sh` (matcher `Write|Edit|MultiEdit`) and `dev-server-guard.sh` (matcher `Bash`) under `PreToolUse`; `lesson-loop-audit.sh`, `diagnosis-evidence-audit.sh`, and `claim-evidence-audit.sh` under `SessionStart`; `diagnosis-evidence-audit.sh --stop` and `claim-evidence-audit.sh --stop` under `Stop` (the tight loop -- block finishing on an untagged causal diagnosis / unprobed absence-or-state claim, loop-guarded via `stop_hook_active`). CI (`.github/workflows/lesson-gates.yml`) runs every hook's self-test so the gates can't silently rot. Not every lesson can or should be HARD -- judgment-heavy ones (L11/L15/L16) get a forced checklist plus the detection audit; the ledger makes that choice explicit rather than pretending all lessons are gateable.
+`LEDGER.md` is the spine: every lesson is classified HARD / SEMI / SOFT by *how it is enforced*. A LESSONS entry with no ledger row, or a SOFT row with no named "next gate", is itself a Lesson-17 open defect. Install: copy `hooks/*.sh` **and `hooks/*.py`** (the audit ships as a thin `.sh` dispatcher + a `.py` engine -- both must land together) to `~/.claude/hooks/`, then register in `~/.claude/settings.json`: `prototype-scaffold-guard.sh` (matcher `Write|Edit|MultiEdit`) and `dev-server-guard.sh` (matcher `Bash`) under `PreToolUse`; `lesson-loop-audit.sh` and `evidence-audit.sh` under `SessionStart`; `evidence-audit.sh --stop` under `Stop` (the tight loop -- block finishing on an untagged/unprobed causal, absence, or state claim, loop-guarded via `stop_hook_active`). CI (`.github/workflows/lesson-gates.yml`) runs every hook's self-test so the gates can't silently rot. Not every lesson can or should be HARD -- judgment-heavy ones (L11/L15/L16) get a forced checklist plus the detection audit; the ledger makes that choice explicit rather than pretending all lessons are gateable.
 
 ---
 
