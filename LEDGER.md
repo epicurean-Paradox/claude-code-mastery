@@ -25,16 +25,14 @@ Two detection mechanisms now run without depending on the operator noticing:
 - **`lesson-loop-audit.sh`** (SessionStart) -- each session, greps first-party frontend
   for scaffold tokens already in the tree and prints the count of SOFT (ungated) lessons
   from this ledger, so the open defects stay visible.
-- **`diagnosis-evidence-audit.sh`** (SessionStart digest / Stop / CI) -- scans recent
-  transcripts for the Lesson-2 shape: a causal / external-suspect diagnosis ("snapshot",
-  "deploy", "stale", "race", "242 vs local") asserted with no source-of-truth probe and
-  no `[hypothesis:]` tag. Surfaces the re-violation a regex over *code* can't (the defect
-  lives in *prose*, not the tree). Self-tested in `hooks/test-fixtures/`.
-- **`claim-evidence-audit.sh`** (SessionStart digest / Stop / CI) -- the sibling for
-  Lessons 11/12/15: flags **absence** claims ("couldn't find", "no such cron", "empty")
-  and **state-chain** claims ("merged so it's live") made with no probe tool-call that
-  turn and no `[verified:]`/`[searched:]` tag. Per-turn probe-tracking keeps it quiet
-  after a real search. Self-tested in `hooks/test-fixtures/`.
+- **`evidence-audit.sh`** (SessionStart digest / Stop / CI) -- one engine, three rule
+  families over the transcript: **causal** diagnoses (Lesson 2 -- "snapshot", "242 vs
+  local"), **absence** claims (Lessons 12/15 -- "couldn't find", "empty"), **state-chain**
+  claims (Lesson 11 -- "merged so it's live"), each flagged untagged + unprobed.
+  Suppression is per-family (causal clears only on an inline tag/probe; absence/state on
+  any probe that turn). Surfaces re-violations a regex over *code* can't -- the defect
+  lives in *prose*, not the tree. Self-tested in `hooks/test-fixtures/`. (Merged from the
+  former diagnosis-evidence-audit + claim-evidence-audit pair, 2026-06-30.)
 - **`dev-server-guard.sh`** (PreToolUse `Bash`) -- *enforcement*, not detection: blocks a
   backgrounded file-watching dev server at call time (Lesson 14, the 65 GB leak).
 
@@ -43,7 +41,7 @@ Two detection mechanisms now run without depending on the operator noticing:
 | # | Lesson | Tier | Enforcement mechanism (or next gate if SOFT) |
 |---|--------|------|----------------------------------------------|
 | 1 | Severity gate is not the response gate | SEMI | Branch-protection conversation-resolution gate (HARD for thread-resolution) + CLAUDE.md PR-pipeline steps 6/7 |
-| 2 | A diagnosis that "matches" an external suspect is not diagnosed (generalised: any causal claim about a discrepancy -- bug, failed step, or two numbers that disagree) | **SEMI + HARD-detect** | Ground-Truth causal-claim row + `[verified:]`/`[hypothesis:]` forcing format on diagnoses (SEMI, read every response) + `hooks/diagnosis-evidence-audit.sh` transcript scan (HARD detection). **Built 2026-06-29** after the lesson re-fired on a £527K-vs-£625K renewal figure; the "next gate" had sat unbuilt for a year (a live Lesson-17 case). Irreducibly judgment-heavy like L11/L15/L16 -- HARD *prevention* is the wrong target; forced format + detection is the honest close |
+| 2 | A diagnosis that "matches" an external suspect is not diagnosed (generalised: any causal claim about a discrepancy -- bug, failed step, or two numbers that disagree) | **SEMI + HARD-detect** | Ground-Truth causal-claim row + `[verified:]`/`[hypothesis:]` forcing format on diagnoses (SEMI, read every response) + `hooks/evidence-audit.sh` transcript scan (HARD detection). **Built 2026-06-29** after the lesson re-fired on a £527K-vs-£625K renewal figure; the "next gate" had sat unbuilt for a year (a live Lesson-17 case). Irreducibly judgment-heavy like L11/L15/L16 -- HARD *prevention* is the wrong target; forced format + detection is the honest close |
 | 3 | Distinguish dev assets from desired outcome | **HARD** | `~/.claude/hooks/prototype-scaffold-guard.sh` (PreToolUse Write/Edit/MultiEdit) blocks scaffold tokens in `frontend/src` |
 | 4 | Multi-account CLI hygiene | SEMI | Memory `reference_github_credentials` (auto-load) + dir-scoped `gh()` wrapper |
 | 5 | Memory is the durable layer | SEMI | SessionStart loads `MEMORY.md`; *next gate*: a session-end "did any decision go uncaptured?" check |
@@ -52,11 +50,11 @@ Two detection mechanisms now run without depending on the operator noticing:
 | 8 | Convene a skill council; ground the names | **SEMI** | CLAUDE.md Ground-Truth row "a design names a file/function/skill -> grep/Read it exists in the tree". Judgment-heavy (a name-existence hook over prose is too noisy to be honest HARD); the read-every-response checklist is the close. Built 2026-06-30 |
 | 9 | Long-running tasks need a worktree on a shared dir | SEMI | Memory `feedback_worktree_isolation_concurrent_sessions` (auto-load) |
 | 10 | A documented merge process is not an enforced one | **HARD** | `main` branch protection (9 strict checks + conversation-resolution), since 2026-06-16 |
-| 11 | The green badge is not the outcome | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth table (pushed/merged/deployed rows) + `hooks/claim-evidence-audit.sh` narrow state-chain detection ("merged so it's live" with no probe this turn). Built 2026-06-30 |
-| 12 | Trust a subagent's "what is wired", verify "what is broken" | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth subagent-boundary + absence row + `hooks/claim-evidence-audit.sh` absence detection (adopting "empty/missing/none" with no probe this turn). Built 2026-06-30 |
+| 11 | The green badge is not the outcome | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth table (pushed/merged/deployed rows) + `hooks/evidence-audit.sh` narrow state-chain detection ("merged so it's live" with no probe this turn). Built 2026-06-30 |
+| 12 | Trust a subagent's "what is wired", verify "what is broken" | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth subagent-boundary + absence row + `hooks/evidence-audit.sh` absence detection (adopting "empty/missing/none" with no probe this turn). Built 2026-06-30 |
 | 13 | A migrated secret is still a leaked secret | SEMI | `secret-scanner.sh` (PreToolUse) + gitleaks blocking CI (HARD for committed secrets); rotation-tracking is SOFT |
 | 14 | The dev server you backgrounded is still running | **HARD** | `hooks/dev-server-guard.sh` (PreToolUse `Bash`) blocks `next dev`/`vite`/`nodemon`/`tsc --watch`/`*run dev` with `run_in_background` or a trailing `&`; foreground start+probe+kill allowed. Built 2026-06-30 |
-| 15 | Accuracy outranks token-frugality on a retrieval request | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth "couldn't find"/absence rows + memory `feedback_accuracy_over_token_conservation` + `hooks/claim-evidence-audit.sh` absence detection (flags "couldn't find" with no search tool-call that turn). Built 2026-06-30 |
+| 15 | Accuracy outranks token-frugality on a retrieval request | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth "couldn't find"/absence rows + memory `feedback_accuracy_over_token_conservation` + `hooks/evidence-audit.sh` absence detection (flags "couldn't find" with no search tool-call that turn). Built 2026-06-30 |
 | 16 | A green test can certify the wrong behaviour | **SEMI** | CLAUDE.md Ground-Truth "passing test != done" row + memory `feedback_test_asserts_intended_not_shipped`. Per-feature judgment (no honest global HARD); the gate is the read-what-it-asserts checklist + the per-feature test rewrite that fails on the regression. Built 2026-06-30 |
 | 17 | A lesson that isn't a gate gets re-violated | **HARD** | **This ledger** + the SessionStart audit that counts SOFT rows. A new lesson with no `Enforcement` cell is an open defect by construction |
 
