@@ -48,10 +48,47 @@ jobs:
           [ -z "$OUT" ] || { echo "::error::loop guard failed -- emitted output while stop_hook_active"; exit 1; }
           echo "loop guard held (silent) as expected"
 
-      - name: Ledger invariant -- L2 is no longer SOFT
+      - name: Syntax -- new hooks (bash + python)
         run: |
-          if grep -E '^\| 2 \|' LEDGER.md | grep -q 'SOFT'; then
-            echo "::error::LEDGER row 2 regressed to SOFT"
+          bash -n hooks/claim-evidence-audit.sh
+          bash -n hooks/dev-server-guard.sh
+          python3 -m py_compile hooks/claim-evidence-audit.py
+          shellcheck -S error hooks/claim-evidence-audit.sh hooks/dev-server-guard.sh
+
+      - name: L11/12/15 claim-evidence -- fail fixture MUST flag (exit 1)
+        run: |
+          if bash hooks/claim-evidence-audit.sh hooks/test-fixtures/fail_absence_state.jsonl; then
+            echo "::error::absence/state fixture did NOT flag -- detection broken"; exit 1
+          fi
+          echo "absence/state flagged as expected"
+
+      - name: L11/12/15 claim-evidence -- pass fixture MUST be clean (probe+tag)
+        run: bash hooks/claim-evidence-audit.sh hooks/test-fixtures/pass_absence_probed.jsonl
+
+      - name: L14 dev-server-guard -- backgrounded watcher MUST block
+        run: |
+          OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"npm run dev","run_in_background":true}}' | bash hooks/dev-server-guard.sh)"
+          echo "$OUT" | grep -q '"continue":false' || { echo "::error::dev-server-guard did not block a backgrounded watcher"; exit 1; }
+          echo "backgrounded watcher blocked as expected"
+
+      - name: L14 dev-server-guard -- foreground start+kill MUST pass
+        run: |
+          OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"npm run dev & P=$!; sleep 3; curl -sf localhost:3000; kill $P"}}' | bash hooks/dev-server-guard.sh)"
+          [ -z "$OUT" ] || { echo "::error::dev-server-guard blocked an allowed foreground start+kill"; exit 1; }
+          echo "foreground start+kill allowed as expected"
+
+      - name: L14 dev-server-guard -- build (not a watcher) MUST pass
+        run: |
+          OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"vite build","run_in_background":true}}' | bash hooks/dev-server-guard.sh)"
+          [ -z "$OUT" ] || { echo "::error::dev-server-guard blocked a non-watching build"; exit 1; }
+          echo "build allowed as expected"
+
+      - name: Ledger invariant -- NO row is SOFT (every lesson is gated)
+        run: |
+          N="$(grep -cE '\| SOFT \|' LEDGER.md || true)"
+          if [ "$N" -ne 0 ]; then
+            echo "::error::$N SOFT (ungated) lesson row(s) remain in LEDGER.md -- an ungated lesson is an open defect"
+            grep -nE '\| SOFT \|' LEDGER.md
             exit 1
           fi
-          echo "L2 enforced (not SOFT)"
+          echo "0 SOFT rows -- every lesson is gated"
