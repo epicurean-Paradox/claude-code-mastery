@@ -144,12 +144,20 @@ Never trust documentation about system state. Always verify:
 | "Endpoint exists, therefore done" | A client actually calls it (wiring is a separate axis) |
 | "It has a passing test, therefore it's done" | Read what the test *asserts* and compare to the *intended* behaviour -- a test written from observed output pins the regression as the contract. See LESSONS Lesson 16 |
 | "I couldn't find it" | Only after searching the *full* corpus (e.g. all `~/.claude/projects/<project>/*.jsonl`); a partial search yields a false "not found". See LESSONS Lesson 15 |
+| "A differs from B **because** Z" / "X broke because of `<snapshot / deploy / stale cache / timing / race / environment>`" | Probe the source of truth that *adjudicates* the discrepancy **before** stating the cause (the upstream report, the authoritative log, a clean-room repro). A cause that *fits* the gap is not the cause that's been *shown* -- that gap is the whole of Lesson 2. Unprobed, it is a hypothesis: write it `[hypothesis: <cheapest probe>]`, never as a finding. See LESSONS Lesson 2 |
 
 **Rule**: if you can verify it in 5 seconds, verify it. Don't cite memory or docs.
 
 **Verify every state transition, not just claims.** A green upstream signal (a clean `push`, a MERGED badge, a successful build) reports a step was *attempted* -- never that the *downstream state* now holds. Each "therefore" between two gates is an unverified assumption until probed. See LESSONS Lesson 11.
 
 **Subagent trust boundary.** A subagent reading source is authoritative about *what is wired* (what exists, what calls what) and only inferential about *what is true at runtime*. Trust its structural findings; verify its "empty / broken / missing" claims against live state before acting. "No cron exists" is not "the table is empty." See LESSONS Lesson 12.
+
+**A diagnosis is a claim too -- tag it or probe it (forcing format).** The Ground-Truth rows above all guard *state* claims ("pushed", "merged", "table exists"). The one category that slips every state-check is the **causal** claim: "the difference is a snapshot", "it broke because of the deploy", "that's just stale data". A plausible mechanism reads as a verified one -- that is precisely how Lesson 2 recurs. So a causal / external-suspect diagnosis carries an inline evidence tag or it is not stated as fact:
+
+- `[verified: <probe>]` -- you ran the probe that adjudicates it (queried the upstream source, reproduced in a clean room, read the authoritative log).
+- `[hypothesis: <cheapest probe>]` -- you have not, and here is the one cheap check that would confirm or kill it.
+
+Tagging a real finding is one phrase; tagging a guess `[verified]` is a lie you will not write -- so the honest path (`[hypothesis]`) is also the cheap one. An **untagged** bare external-cause diagnosis is the defect. The forcing function that actually catches this in practice: *before you write the cause, write the evidence line that proves it* -- if you can't, it's a hypothesis. (This is what catches it when a diagnosis goes into external comms; the rule pulls that check earlier, to every causal claim.) Detection backstop: `hooks/diagnosis-evidence-audit.sh` scans transcripts for untagged causal/external diagnoses and surfaces them. See LESSONS Lesson 2 + LEDGER row 2.
 
 ---
 
@@ -169,8 +177,9 @@ Distillation and recall do not close the loop on their own -- the failure mode o
 
 - **Enforcement (write time).** `hooks/prototype-scaffold-guard.sh` is a PreToolUse hook (matcher `Write|Edit|MultiEdit`) that blocks design-prototype scaffold (a state-gallery stepper, reviewer nav hints, `StageLabel` banners) from landing in first-party frontend source -- the Lesson 3 violation, now failing loud instead of shipping.
 - **Detection (session start).** `hooks/lesson-loop-audit.sh` is a SessionStart hook that greps the live frontend tree for scaffold already shipped and counts the SOFT (ungated) rows in `LEDGER.md`, so re-violations and open defects surface without a human noticing.
+- **Detection (transcript).** `hooks/diagnosis-evidence-audit.sh` scans recent transcripts for the Lesson-2 shape -- a causal / external-suspect diagnosis ("snapshot", "deploy", "stale", "race", "242 vs local") asserted with no source-of-truth probe and no `[hypothesis:]` tag -- and surfaces it. SessionStart digest by default; also runnable on one file (`<transcript>` arg, exit 1 on a hit) as a Stop hook or in CI. Self-tested in `hooks/test-fixtures/` (flags the real "527K is the 242 snapshot" turn, passes the tagged rewrite).
 
-`LEDGER.md` is the spine: every lesson is classified HARD / SEMI / SOFT by *how it is enforced*. A LESSONS entry with no ledger row, or a SOFT row with no named "next gate", is itself a Lesson-17 open defect. Install: copy `hooks/*.sh` to `~/.claude/hooks/` and register them in `~/.claude/settings.json` under `PreToolUse` (`Write|Edit|MultiEdit`) and `SessionStart`. Not every lesson can or should be HARD -- judgment-heavy ones (L11/L15/L16) get a forced checklist plus the detection audit; the ledger makes that choice explicit rather than pretending all lessons are gateable.
+`LEDGER.md` is the spine: every lesson is classified HARD / SEMI / SOFT by *how it is enforced*. A LESSONS entry with no ledger row, or a SOFT row with no named "next gate", is itself a Lesson-17 open defect. Install: copy `hooks/*.sh` **and `hooks/*.py`** (the audit ships as a thin `.sh` dispatcher + a `.py` engine -- both must land together) to `~/.claude/hooks/`, then register in `~/.claude/settings.json`: `prototype-scaffold-guard.sh` under `PreToolUse` (`Write|Edit|MultiEdit`); `lesson-loop-audit.sh` and `diagnosis-evidence-audit.sh` under `SessionStart`; `diagnosis-evidence-audit.sh --stop` under `Stop` (the tight loop -- blocks finishing on an untagged causal diagnosis, loop-guarded via `stop_hook_active`). CI (`.github/workflows/lesson-gates.yml`) runs the audit's self-test so the detection gate can't silently rot. Not every lesson can or should be HARD -- judgment-heavy ones (L11/L15/L16) get a forced checklist plus the detection audit; the ledger makes that choice explicit rather than pretending all lessons are gateable.
 
 ---
 

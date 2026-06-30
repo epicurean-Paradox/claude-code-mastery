@@ -1,0 +1,57 @@
+name: lesson-gates
+
+# Makes the Lesson-2 detection gate self-enforcing: if hooks/diagnosis-evidence-audit
+# stops flagging the real failure (or starts flagging the tagged rewrite), CI goes red.
+# A detection hook with no test is the SOFT trap it exists to prevent.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  diagnosis-evidence-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax (bash + python)
+        run: |
+          bash -n hooks/diagnosis-evidence-audit.sh
+          python3 -m py_compile hooks/diagnosis-evidence-audit.py
+
+      - name: Shellcheck (errors only)
+        run: shellcheck -S error hooks/diagnosis-evidence-audit.sh
+
+      - name: Self-test -- fail fixture MUST flag (exit 1)
+        run: |
+          if bash hooks/diagnosis-evidence-audit.sh hooks/test-fixtures/fail_untagged_diagnosis.jsonl; then
+            echo "::error::fail fixture did NOT flag the '242 snapshot' diagnosis -- detection gate is broken"
+            exit 1
+          fi
+          echo "fail fixture flagged as expected"
+
+      - name: Self-test -- pass fixture MUST be clean (exit 0)
+        run: bash hooks/diagnosis-evidence-audit.sh hooks/test-fixtures/pass_tagged_diagnosis.jsonl
+
+      - name: Self-test -- Stop mode blocks on a violation
+        run: |
+          OUT="$(printf '{"transcript_path":"%s/hooks/test-fixtures/fail_untagged_diagnosis.jsonl","stop_hook_active":false}' "$PWD" \
+            | bash hooks/diagnosis-evidence-audit.sh --stop)"
+          echo "$OUT" | grep -q '"decision": "block"' || { echo "::error::Stop mode did not block on the violation"; exit 1; }
+          echo "Stop mode blocked as expected"
+
+      - name: Self-test -- Stop mode loop-guard (stop_hook_active=true is silent)
+        run: |
+          OUT="$(printf '{"transcript_path":"%s/hooks/test-fixtures/fail_untagged_diagnosis.jsonl","stop_hook_active":true}' "$PWD" \
+            | bash hooks/diagnosis-evidence-audit.sh --stop)"
+          [ -z "$OUT" ] || { echo "::error::loop guard failed -- emitted output while stop_hook_active"; exit 1; }
+          echo "loop guard held (silent) as expected"
+
+      - name: Ledger invariant -- L2 is no longer SOFT
+        run: |
+          if grep -E '^\| 2 \|' LEDGER.md | grep -q 'SOFT'; then
+            echo "::error::LEDGER row 2 regressed to SOFT"
+            exit 1
+          fi
+          echo "L2 enforced (not SOFT)"

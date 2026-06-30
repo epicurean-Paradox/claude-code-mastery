@@ -90,6 +90,33 @@ A diagnosis that *fits the evidence* is not the same as a diagnosis that *explai
 
 Always run the clean-room reproduction before committing to an external-suspect diagnosis. The cost is one private-window session; the cost of being wrong is hours of mis-routed remediation and an unfixed production bug.
 
+### Re-violation (2026-06-29) -- the lesson held the bug shape, not the bug class
+
+Same failure, a year and a domain away from the Cognito case -- which is the point. A `/livegtm` renewal figure read **£625,365** when a PR commit message cited **£527K**. The assistant explained the gap as a *deploy-time data snapshot* difference -- "the £527K is the 242 (cloud) snapshot at commit time; my local pull of the same opps sums to £625K" -- and stated it as a finding, told the user there was no discrepancy to fix.
+
+It was wrong. The cited base ARR matched to the penny, so it was the *same eight opportunities*; nothing had changed since they last closed. Pulling the actual Salesforce source report (`analytics/reports/<id>`) settled it in one query: the report itself reads **£625,365.12** -- the pipeline matched the source exactly, and the £527K was a stale quarter-to-date figure captured before a mid-June renewal closed. There was no snapshot difference; that mechanism merely *fit* the gap.
+
+What's notable: the assistant knew Lesson 2. It loaded as context. It did not fire, because L2 was filed as a *bug-diagnosis* lesson (extensions, proxies, `req.url`) and this looked like a *number explanation*, not a bug. The lesson was shape-bound. And the thing that finally forced the check was external: the user asked for the explanation in writing, for Slack -- a claim that has to carry evidence cannot survive on plausibility.
+
+Two corrections to the lesson:
+
+1. **The class is "any causal claim about a discrepancy", not "any bug that looks environmental".** A discrepancy between two numbers, two states, or expected-vs-observed is the same falsification problem as a bug that looks like an extension. "X differs from Y because Z" is a claim; until the source that *adjudicates* X vs Y is probed, Z is a hypothesis that happens to fit.
+
+2. **Pull the external forcing-function earlier.** What caught it (a diagnosis bound for external comms must carry evidence) should apply to *every* causal claim, not just the ones that get written down for someone else. Encoded as the forcing format in CLAUDE.md: a causal/external diagnosis carries `[verified: <probe>]` or `[hypothesis: <probe>]`, or it is not stated as fact.
+
+### What changed in the system (this time -- a gate, not a paragraph)
+
+L2's ledger row had named its next gate ("a 'reproduced locally?' checklist line before adopting an external diagnosis") and **left it unbuilt for a year** -- so the lesson re-fired exactly as Lesson 17 predicts. The gate now exists:
+
+- A Ground-Truth row for the causal claim-type (the one row the table was missing -- it guarded state, never causation).
+- The `[verified:]` / `[hypothesis:]` forcing format on diagnoses.
+- `hooks/diagnosis-evidence-audit.sh` -- detection that flags an untagged causal/external diagnosis in a transcript, self-tested against this exact "527K is the 242 snapshot" turn.
+- Ledger row 2 promoted SOFT -> SEMI + HARD-detection.
+
+### Generalisable pattern (restated)
+
+A diagnosis that *fits the evidence* is not a diagnosis that has *been shown*. This holds for a production bug, a failed pipeline step, or two numbers that disagree. Name the suspect, then probe the source that can falsify it -- before you assert it, not after someone asks you to defend it.
+
 ---
 
 ## Lesson 3 -- Distinguish dev assets from desired outcome
