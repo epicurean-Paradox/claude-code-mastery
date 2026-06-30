@@ -140,6 +140,18 @@ Parallelism is a property of the *work*, not a speed dial — it only buys speed
 
 When a workflow bounds coverage (top-N findings, sampling, no-retry, capped agent count), say so explicitly and name what was dropped. The user decides whether bounded coverage is acceptable — do not silently present a partial sweep as exhaustive.
 
+## Agent Loop Controls (SDK reference)
+
+The Agent SDK exposes runtime controls a methodology layer is otherwise silent on. For a production agent, set them deliberately — the caveats matter as much as the levers.
+
+- **Turns / budget caps** (`max_turns`, `max_budget_usd`) — bound an autonomous run so an open-ended prompt ("improve this codebase") can't run unbounded. Frame it as a governance rail sized to your risk tolerance, not as austerity: a cap on blast radius and runaway spend, not a claim that compute is scarce.
+- **Effort** (`low` / `medium` / `high` / `xhigh` / `max`) — trade reasoning depth for cost and latency per call: `low` for file lookups and listings, `high`/`xhigh` for refactors and debugging. A lever to reach for with a reason, not a default to micromanage; left unset, the model picks.
+- **Model per subagent** — pin a cheaper model on mechanical, high-volume subagents (locators, sweeps), keep the strong model for synthesis. Caveat: inherit by default — a wrong pin silently regresses quality, which is harder to notice than the token saving is to capture.
+- **Session resume / fork** (`session_id`) — the lossless primary for *same-environment* continuation: resume restores full prior context (files read, actions taken); fork branches it to compare approaches. Reserve a written HANDOFF for *cross-environment / cross-operator* handoff, where the session can't be resumed and only what the author wrote down survives.
+- **Read-only tool concurrency** (`readOnlyHint`) — when you author a custom MCP tool that only reads, annotate it `readOnlyHint` so the SDK runs it concurrently with other reads; never set it on a state-mutating tool.
+
+These complete the runtime-control surface alongside tool/permission scoping (**Permission Posture**, above) and termination handling (**Autonomous-Run Terminal States**, below).
+
 ## Autonomous-Run Terminal States
 
 A loop that ended is not a loop that succeeded. Every autonomous or scheduled run (`/loop`, cron, a long agent session) must branch on WHY it stopped before treating its output as done — read `ResultMessage.subtype` and `stop_reason` where you read the result:
