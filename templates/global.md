@@ -23,6 +23,14 @@
 - Verify signatures on incoming webhooks before processing.
 - Principle of least privilege for all service accounts.
 
+## Permission Posture (agent harness)
+
+Least privilege applies to the agent's tool access, not just service accounts. Set the harness's three layers deliberately, per environment:
+
+- **Scope the tools first.** Prefer a narrow `allowed_tools` allowlist with command scoping (`Bash(npm *)`, `Bash(git *)`) over a blanket approval; anything unlisted still needs permission.
+- **Pick the mode for the environment.** `default` + an approval callback for interactive work; `acceptEdits` on a dev machine (auto-approves edits + common fs commands, still gates other Bash); `plan` to explore without touching source; `bypassPermissions` ONLY in an isolated CI/container where the agent cannot reach anything you care about (never as root).
+- **Hooks are the second line, not the first.** A `PreToolUse` guard backstops the allow/deny layer; it does not replace scoping the tools.
+
 ## Git Conventions
 
 - `main` is always deployable — no direct commits.
@@ -131,3 +139,15 @@ Parallelism is a property of the *work*, not a speed dial — it only buys speed
 ### Cost honesty
 
 When a workflow bounds coverage (top-N findings, sampling, no-retry, capped agent count), say so explicitly and name what was dropped. The user decides whether bounded coverage is acceptable — do not silently present a partial sweep as exhaustive.
+
+## Autonomous-Run Terminal States
+
+A loop that ended is not a loop that succeeded. Every autonomous or scheduled run (`/loop`, cron, a long agent session) must branch on WHY it stopped before treating its output as done — read `ResultMessage.subtype` and `stop_reason` where you read the result:
+
+- `success` — proceed.
+- `error_max_turns` — unfinished; resume the session with a higher turn cap, do not report done.
+- `error_max_budget_usd` — halt and alert; do not silently retry into more spend.
+- `error_during_execution` — transient (API failure / cancel); backoff-retry.
+- `stop_reason == "refusal"` — the model declined; escalate to a human, never auto-loop.
+
+A green-looking run that hit a turn cap is a false done. Pairs with the stale-schedule rule: a scheduled prompt that pre-dates the latest directive yields to the directive — and a run that terminated abnormally yields to a human, not to the next loop iteration.
