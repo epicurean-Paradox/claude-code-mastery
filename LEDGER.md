@@ -30,6 +30,13 @@ Two detection mechanisms now run without depending on the operator noticing:
   "deploy", "stale", "race", "242 vs local") asserted with no source-of-truth probe and
   no `[hypothesis:]` tag. Surfaces the re-violation a regex over *code* can't (the defect
   lives in *prose*, not the tree). Self-tested in `hooks/test-fixtures/`.
+- **`claim-evidence-audit.sh`** (SessionStart digest / Stop / CI) -- the sibling for
+  Lessons 11/12/15: flags **absence** claims ("couldn't find", "no such cron", "empty")
+  and **state-chain** claims ("merged so it's live") made with no probe tool-call that
+  turn and no `[verified:]`/`[searched:]` tag. Per-turn probe-tracking keeps it quiet
+  after a real search. Self-tested in `hooks/test-fixtures/`.
+- **`dev-server-guard.sh`** (PreToolUse `Bash`) -- *enforcement*, not detection: blocks a
+  backgrounded file-watching dev server at call time (Lesson 14, the 65 GB leak).
 
 ## The ledger
 
@@ -42,15 +49,15 @@ Two detection mechanisms now run without depending on the operator noticing:
 | 5 | Memory is the durable layer | SEMI | SessionStart loads `MEMORY.md`; *next gate*: a session-end "did any decision go uncaptured?" check |
 | 6 | Branch from fresh main; re-run flakes | SEMI | `pre-commit` branch-validation (HARD for branch name) + SOFT for the re-run-don't-chase judgment |
 | 7 | Multi-agent is opt-in | SEMI | CLAUDE.md ultracode gate (keyword-triggered) |
-| 8 | Convene a skill council; ground the names | SOFT | *Next gate*: a "names grounded against code?" checklist line for load-bearing design |
+| 8 | Convene a skill council; ground the names | **SEMI** | CLAUDE.md Ground-Truth row "a design names a file/function/skill -> grep/Read it exists in the tree". Judgment-heavy (a name-existence hook over prose is too noisy to be honest HARD); the read-every-response checklist is the close. Built 2026-06-30 |
 | 9 | Long-running tasks need a worktree on a shared dir | SEMI | Memory `feedback_worktree_isolation_concurrent_sessions` (auto-load) |
 | 10 | A documented merge process is not an enforced one | **HARD** | `main` branch protection (9 strict checks + conversation-resolution), since 2026-06-16 |
-| 11 | The green badge is not the outcome | SOFT | CLAUDE.md Ground-Truth table (checklist). *Next gate*: per-claim verify is judgment; covered by the SessionStart audit + the verify checklist |
-| 12 | Trust a subagent's "what is wired", verify "what is broken" | SOFT | *Next gate*: a verify step before acting on a subagent "empty/missing" claim |
+| 11 | The green badge is not the outcome | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth table (pushed/merged/deployed rows) + `hooks/claim-evidence-audit.sh` narrow state-chain detection ("merged so it's live" with no probe this turn). Built 2026-06-30 |
+| 12 | Trust a subagent's "what is wired", verify "what is broken" | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth subagent-boundary + absence row + `hooks/claim-evidence-audit.sh` absence detection (adopting "empty/missing/none" with no probe this turn). Built 2026-06-30 |
 | 13 | A migrated secret is still a leaked secret | SEMI | `secret-scanner.sh` (PreToolUse) + gitleaks blocking CI (HARD for committed secrets); rotation-tracking is SOFT |
-| 14 | The dev server you backgrounded is still running | SOFT | **Mechanizable -- next gate**: a PreToolUse Bash guard that blocks `next dev`/`vite`/`tsc --watch` with `run_in_background`/`&` |
-| 15 | Accuracy outranks token-frugality on a retrieval request | SOFT | CLAUDE.md Ground-Truth "couldn't find" row + memory `feedback_accuracy_over_token_conservation`. *Next gate*: behavioral; the SessionStart audit demonstrates exhaustive scope |
-| 16 | A green test can certify the wrong behaviour | SOFT | CLAUDE.md Ground-Truth "passing test != done" row + memory `feedback_test_asserts_intended_not_shipped`. *Next gate*: per-feature -- rewrite the asserting test (e.g. FI-3) so CI fails on the regression |
+| 14 | The dev server you backgrounded is still running | **HARD** | `hooks/dev-server-guard.sh` (PreToolUse `Bash`) blocks `next dev`/`vite`/`nodemon`/`tsc --watch`/`*run dev` with `run_in_background` or a trailing `&`; foreground start+probe+kill allowed. Built 2026-06-30 |
+| 15 | Accuracy outranks token-frugality on a retrieval request | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth "couldn't find"/absence rows + memory `feedback_accuracy_over_token_conservation` + `hooks/claim-evidence-audit.sh` absence detection (flags "couldn't find" with no search tool-call that turn). Built 2026-06-30 |
+| 16 | A green test can certify the wrong behaviour | **SEMI** | CLAUDE.md Ground-Truth "passing test != done" row + memory `feedback_test_asserts_intended_not_shipped`. Per-feature judgment (no honest global HARD); the gate is the read-what-it-asserts checklist + the per-feature test rewrite that fails on the regression. Built 2026-06-30 |
 | 17 | A lesson that isn't a gate gets re-violated | **HARD** | **This ledger** + the SessionStart audit that counts SOFT rows. A new lesson with no `Enforcement` cell is an open defect by construction |
 
 ## Cadence
