@@ -35,6 +35,10 @@ Two detection mechanisms now run without depending on the operator noticing:
   former diagnosis-evidence-audit + claim-evidence-audit pair, 2026-06-30.)
 - **`dev-server-guard.sh`** (PreToolUse `Bash`) -- *enforcement*, not detection: blocks a
   backgrounded file-watching dev server at call time (Lesson 14, the 65 GB leak).
+- **`precompact-archive.sh`** (PreCompact) -- *preservation*: snapshots the full transcript
+  to `~/.claude/precompact-archives/` before the SDK summarizes older turns. Closes the
+  blind spot where the transcript-scanning audits above read exactly the history that
+  in-session compaction destroys.
 
 ## The ledger
 

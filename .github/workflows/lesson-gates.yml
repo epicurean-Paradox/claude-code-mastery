@@ -75,6 +75,20 @@ jobs:
           [ -z "$OUT" ] || { echo "::error::dev-server-guard blocked a non-watching build"; exit 1; }
           echo "build allowed as expected"
 
+      - name: precompact-archive -- snapshots the transcript before compaction
+        run: |
+          bash -n hooks/precompact-archive.sh
+          shellcheck -S error hooks/precompact-archive.sh
+          TMP="$(mktemp "${RUNNER_TEMP:-/tmp}/t.XXXX.jsonl")"; echo '{"type":"user"}' > "$TMP"
+          export HOME="${RUNNER_TEMP:-/tmp}/fakehome"; mkdir -p "$HOME"
+          printf '{"transcript_path":"%s","trigger":"auto"}' "$TMP" | bash hooks/precompact-archive.sh
+          N="$(ls "$HOME"/.claude/precompact-archives/*.jsonl 2>/dev/null | wc -l)"
+          [ "$N" -ge 1 ] || { echo "::error::precompact-archive did not snapshot the transcript"; exit 1; }
+          echo "precompact-archive snapshotted as expected"
+
+      - name: precompact-archive -- missing transcript_path is a silent no-op
+        run: printf '{"trigger":"auto"}' | bash hooks/precompact-archive.sh
+
       - name: Ledger invariant -- NO row is SOFT (every lesson is gated)
         run: |
           N="$(grep -cE '\| SOFT \|' LEDGER.md || true)"
