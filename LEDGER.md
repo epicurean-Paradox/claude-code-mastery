@@ -25,13 +25,18 @@ Two detection mechanisms now run without depending on the operator noticing:
 - **`lesson-loop-audit.sh`** (SessionStart) -- each session, greps first-party frontend
   for scaffold tokens already in the tree and prints the count of SOFT (ungated) lessons
   from this ledger, so the open defects stay visible.
+- **`diagnosis-evidence-audit.sh`** (SessionStart digest / Stop / CI) -- scans recent
+  transcripts for the Lesson-2 shape: a causal / external-suspect diagnosis ("snapshot",
+  "deploy", "stale", "race", "242 vs local") asserted with no source-of-truth probe and
+  no `[hypothesis:]` tag. Surfaces the re-violation a regex over *code* can't (the defect
+  lives in *prose*, not the tree). Self-tested in `hooks/test-fixtures/`.
 
 ## The ledger
 
 | # | Lesson | Tier | Enforcement mechanism (or next gate if SOFT) |
 |---|--------|------|----------------------------------------------|
 | 1 | Severity gate is not the response gate | SEMI | Branch-protection conversation-resolution gate (HARD for thread-resolution) + CLAUDE.md PR-pipeline steps 6/7 |
-| 2 | A bug that "matches" an external suspect is not diagnosed | SOFT | *Next gate*: a "reproduced locally?" checklist line before adopting an external diagnosis |
+| 2 | A diagnosis that "matches" an external suspect is not diagnosed (generalised: any causal claim about a discrepancy -- bug, failed step, or two numbers that disagree) | **SEMI + HARD-detect** | Ground-Truth causal-claim row + `[verified:]`/`[hypothesis:]` forcing format on diagnoses (SEMI, read every response) + `hooks/diagnosis-evidence-audit.sh` transcript scan (HARD detection). **Built 2026-06-29** after the lesson re-fired on a £527K-vs-£625K renewal figure; the "next gate" had sat unbuilt for a year (a live Lesson-17 case). Irreducibly judgment-heavy like L11/L15/L16 -- HARD *prevention* is the wrong target; forced format + detection is the honest close |
 | 3 | Distinguish dev assets from desired outcome | **HARD** | `~/.claude/hooks/prototype-scaffold-guard.sh` (PreToolUse Write/Edit/MultiEdit) blocks scaffold tokens in `frontend/src` |
 | 4 | Multi-account CLI hygiene | SEMI | Memory `reference_github_credentials` (auto-load) + dir-scoped `gh()` wrapper |
 | 5 | Memory is the durable layer | SEMI | SessionStart loads `MEMORY.md`; *next gate*: a session-end "did any decision go uncaptured?" check |

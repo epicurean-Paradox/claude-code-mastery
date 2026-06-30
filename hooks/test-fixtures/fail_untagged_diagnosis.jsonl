@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"why is renewed 625k locally but 527k in the commit?"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"B's code is correct. The 527K vs 625K is a data-snapshot difference, not a code bug. The 527K is the 242 snapshot at commit time; my local fresh pull of the same 8 opps sums to 625K because of cloud-vs-local timing. Nothing to fix."}]}}
