@@ -27,12 +27,19 @@
 
 Do NOT start work until these steps are complete.
 
-## Session Decay Prevention
+## Summary instructions
 
-Every 10 responses OR when switching tasks:
-1. Re-read PROJECT_PLAN.md current phase
-2. Verify alignment with stated priorities
-3. If drifted: "Refocusing on [current phase] per project plan"
+# Read by the IN-SESSION compactor: when the context window fills, the SDK
+# automatically summarizes older turns mid-session and early instructions can be
+# lost. It reads this CLAUDE.md, so it preserves what is listed here. (Durable
+# rules belong in this file, re-injected every request, not only in the opening
+# prompt, which is one-shot and gets summarized away.)
+When summarizing this conversation, always preserve:
+- The current task objective and its acceptance criteria
+- File:line paths read or modified this session
+- The last test / probe results and any error messages
+- Decisions made and the reasoning behind them
+- Open Known Gaps and the current phase from PROJECT_PLAN.md
 
 ## Context Limit Protocol
 

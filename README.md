@@ -35,6 +35,8 @@ All layers merge. Each adds specificity without repeating the layer above.
 
 **Why it works**: A bot project and a data pipeline project need completely different rules. But they both need your security standards and git conventions. Layer once, specialize per project.
 
+**The durability payoff**: CLAUDE.md is prompt-cached and re-injected on every request, so it survives in-session compaction — the automatic mid-session summarization that silently drops instructions from early turns. A rule put only in the opening prompt is one-shot and gets summarized away. So anything that must outlive a long session belongs in CLAUDE.md by necessity, not taste.
+
 See [templates/](templates/) for ready-to-use files at each layer.
 
 ### 2. Session Continuity Protocol
