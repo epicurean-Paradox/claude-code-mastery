@@ -532,3 +532,63 @@ When a lesson is written, it must name the mechanism that will enforce it. Lesso
 ### Generalisable pattern
 
 The deliverable of a retrospective is the gate it produces, not the paragraph it writes. A lesson with no enforcement is a hope, and hopes decay into re-violations. Measure a lesson by whether something now fails loudly when it is broken; if nothing does, the lesson is not yet real -- it is a note about a real thing that has not been built.
+
+---
+
+## Lesson 18 -- The merge gate only sees the checks you made required
+
+### What happened
+
+An automated merge poller gated PRs on "all required status checks green." The repository also ran a Playwright visual-regression job and a real-data end-to-end job on every frontend PR -- but neither had ever been added to the branch-protection required set. On two frontend PRs the poller stood ready to merge with those jobs still running; they happened to pass, which is luck, not discipline. The jobs existed precisely because unit tests miss visual and integration regressions -- and the gate silently ignored them.
+
+### What was wrong with the response
+
+"Merge when required checks are green" quietly redefines *green* as *the subset someone once registered as required*. Adding a CI job and making it blocking are two separate acts, and the gap between them is invisible on a passing day -- it only bites on the day the job fails, which is the one day it mattered. A human reading the checks page would see the red row; an automated gate reads only the required set.
+
+### What changed in the system
+
+Both jobs were added to the branch-protection `required_status_checks` set (one `gh api PATCH`), so the platform itself now refuses the merge regardless of what any poller believes -- belt (repo) and suspenders (poller). The merge checklist gained a line: for any PR class with class-specific jobs (frontend -> visual regression + e2e), confirm those jobs are in the *required* set, not merely present in the run list.
+
+### Generalisable pattern
+
+Every "all checks green" automation has a hidden filter: *which* checks. Audit the required set against the full workflow list whenever a new job lands. A check that is not required is a check the merge gate cannot see -- and it will fail for the first time on exactly the day it was built for. Extends Lesson 10: a documented CI job is not an enforced one until branch protection knows its name.
+
+---
+
+## Lesson 19 -- Clean source, green deploy, correct API -- and the UI is still wrong
+
+### What happened
+
+A dashboard table accumulated ghost rows each time a filter was toggled. The source read clean (the row list was a pure `useMemo`), the deploy was green, the API payload was verified correct -- so the investigation burned turns on stale-image and build-cache theories. The real cause was a React duplicate-key defect: the row key was built from displayed fields (account | date | owner | amount), two distinct records shared every displayed field and collided on one key, and React orphaned a row node on re-render, where it accumulated. The tell was on screen the whole time: the footer count (array length) disagreed with the rendered row count (the DOM).
+
+### What was wrong with the response
+
+"Source is clean, so it must be infra" is a false dichotomy. Between clean source and wrong pixels sit two layers that rarely get probed: the *compiled bundle* and the *framework runtime* (reconciliation, keys, effects). A green unit test proved nothing because its fixture had unique rows -- the bug needed two identical-identity rows, so the test asserted the fixture, not the failure mode (Lesson 16's shape again). Meanwhile the stale-image theory was "supported" by a chunk-hash mismatch against a local build that was actually just build-environment variance.
+
+### What changed in the system
+
+Layer-by-layer first-hand probes, in order, before theorising: DB query -> authed API payload -> compiled artifact (pull the deployed image and byte-diff the chunk against source-derived logic; a hash or filename mismatch alone is NOT staleness) -> runtime (reproduce with duplicate-identity fixtures). Rule for list rendering: keys must stay unique even when logical identity collides -- a per-identity occurrence index or a real id, never displayed fields alone. The fixture library gained duplicate-identity rows so the regression now has a failing shape.
+
+### Generalisable pattern
+
+Extends Lesson 11 down to the render layer: clean source + green deploy + correct API is still two probes short of "the UI is right." The layers people skip -- the compiled artifact and the framework runtime -- each need their own first-hand probe, and the runtime probe needs data shaped like the failure (duplicates, collisions), not like the happy path.
+
+---
+
+## Lesson 20 -- The HIGHs can live only in the review body you didn't read
+
+### What happened
+
+A PR response pass read every inline bot comment (two MEDIUMs) plus a truncated preview of the top-level review, and prepared to merge. The full top-level review body contained three HIGH findings that had no inline counterpart. They surfaced only because a follow-up review's checklist happened to re-mention them.
+
+### What was wrong with the response
+
+The reviewer bot posts some findings as inline comments and others only in the top-level review body. A severity gate that enumerates inline threads is therefore unauditable by construction: it verifies "no unresolved HIGH *inline*" while the HIGHs sit one API call away. The truncation made the miss invisible -- the body *was* fetched, just not all of it, and a partial read presents as a completed one.
+
+### What changed in the system
+
+The response gate now fetches the complete body of every top-level comment and review (both endpoints -- issue comments AND pull-request reviews -- untruncated), greps them for severity markers, and reconciles every finding against a fix commit or an inline reply before merge. Truncated previews are for triage only, never for the gate.
+
+### Generalisable pattern
+
+A gate that consumes a reviewer's output must read the same surface the reviewer writes to -- all of it. Any truncation, pagination stop, or "inline only" filter between reviewer and gate is a slot where the highest-severity finding passes silently. Extends Lesson 1: you cannot owe the reviewer a response to a comment you never fetched.
