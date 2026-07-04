@@ -181,6 +181,7 @@ An agent shell is not an interactive terminal with a human watching resource usa
 - **Never background a file-watching dev server** (`next dev`, `vite`, `nodemon`, `tsc --watch`). The runtime stops tracking a backgrounded process after the turn, nothing reaps it, and a watcher rooted at the wrong directory grows without bound (one leaked past 65 GB RAM). To probe a dev server, start + curl + kill in one compound command, or let the test runner own its lifecycle. Sweep `pgrep` / `docker ps` at session end.
 - **Never use `sed` / `perl -0pi` for source edits that may contain non-ASCII.** Stream editors carry no UTF-8 guarantee and corrupt multibyte characters (em-dash, section sign) into mojibake. Use the structured edit tool.
 - **Prefer literal absolute paths.** `~` / `expanduser` can resolve to the cwd, not home. When stdout looks duplicated or truncated, write to a temp file and read it back. NFC-normalise macOS filenames before matching. Don't move a parent of the working directory mid-session while relying on relative paths.
+- **PostgreSQL resolves every static table reference at parse time.** A `to_regclass(...)` CASE guard does NOT protect a query that statically references a possibly-missing table -- the parser rejects the reference before any branch is evaluated. Probe presence with `to_regclass` in a SEPARATE statement, then issue the dependent query only if present. Corollary: a test that skips when the table is absent never exercises the absent-table SQL path, so it cannot catch this.
 
 See LESSONS Lesson 14.
 
