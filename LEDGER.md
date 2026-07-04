@@ -35,6 +35,10 @@ Two detection mechanisms now run without depending on the operator noticing:
   former diagnosis-evidence-audit + claim-evidence-audit pair, 2026-06-30.)
 - **`dev-server-guard.sh`** (PreToolUse `Bash`) -- *enforcement*, not detection: blocks a
   backgrounded file-watching dev server at call time (Lesson 14, the 65 GB leak).
+- **`secret-scanner.sh`** (PreToolUse `Bash`) -- *enforcement*: blocks `git commit` when
+  the staged diff contains credential patterns (AWS keys, PEM blocks, assigned
+  secrets/passwords/tokens) -- the write-time end of Lesson 13. gitleaks in CI is the
+  push-time end; issuer-side rotation is still the only true close once a value leaked.
 - **`precompact-archive.sh`** (PreCompact) -- *preservation*: snapshots the full transcript
   to `~/.claude/precompact-archives/` before the SDK summarizes older turns. Closes the
   blind spot where the transcript-scanning audits above read exactly the history that
@@ -56,7 +60,7 @@ Two detection mechanisms now run without depending on the operator noticing:
 | 10 | A documented merge process is not an enforced one | **HARD** | `main` branch protection (9 strict checks + conversation-resolution), since 2026-06-16 |
 | 11 | The green badge is not the outcome | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth table (pushed/merged/deployed rows) + `hooks/evidence-audit.sh` narrow state-chain detection ("merged so it's live" with no probe this turn). Built 2026-06-30 |
 | 12 | Trust a subagent's "what is wired", verify "what is broken" | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth subagent-boundary + absence row + `hooks/evidence-audit.sh` absence detection (adopting "empty/missing/none" with no probe this turn). Built 2026-06-30 |
-| 13 | A migrated secret is still a leaked secret | SEMI | `secret-scanner.sh` (PreToolUse) + gitleaks blocking CI (HARD for committed secrets); rotation-tracking is SOFT |
+| 13 | A migrated secret is still a leaked secret | SEMI | `hooks/secret-scanner.sh` (PreToolUse `Bash`, vendored + CI-tested -- blocks `git commit` on a credential-pattern staged diff) + gitleaks blocking CI (HARD for committed secrets); rotation-tracking is SOFT |
 | 14 | The dev server you backgrounded is still running | **HARD** | `hooks/dev-server-guard.sh` (PreToolUse `Bash`) blocks `next dev`/`vite`/`nodemon`/`tsc --watch`/`*run dev` with `run_in_background` or a trailing `&`; foreground start+probe+kill allowed. Built 2026-06-30 |
 | 15 | Accuracy outranks token-frugality on a retrieval request | **SEMI + HARD-detect** | CLAUDE.md Ground-Truth "couldn't find"/absence rows + memory `feedback_accuracy_over_token_conservation` + `hooks/evidence-audit.sh` absence detection (flags "couldn't find" with no search tool-call that turn). Built 2026-06-30 |
 | 16 | A green test can certify the wrong behaviour | **SEMI** | CLAUDE.md Ground-Truth "passing test != done" row + memory `feedback_test_asserts_intended_not_shipped`. Per-feature judgment (no honest global HARD); the gate is the read-what-it-asserts checklist + the per-feature test rewrite that fails on the regression. Built 2026-06-30 |

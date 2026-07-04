@@ -10,6 +10,9 @@ on:
     branches: ["**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   gates:
     runs-on: ubuntu-latest
@@ -88,6 +91,65 @@ jobs:
 
       - name: precompact-archive -- missing transcript_path is a silent no-op
         run: printf '{"trigger":"auto"}' | bash hooks/precompact-archive.sh
+
+      - name: secret-scanner + python-format -- syntax + shellcheck
+        run: |
+          bash -n hooks/secret-scanner.sh
+          bash -n hooks/python-format.sh
+          shellcheck -S error hooks/secret-scanner.sh hooks/python-format.sh
+
+      - name: secret-scanner -- staged credential MUST block (Lesson 13)
+        run: |
+          R="$(mktemp -d)"; git -C "$R" init -q
+          # AWS's documented example key -- never a live credential
+          printf 'aws_key = "AKIAIOSFODNN7EXAMPLE"\npassword = "hunter2hunter2"\n' > "$R/config.py"
+          git -C "$R" add config.py
+          OUT="$(cd "$R" && printf '{"tool_name":"Bash","tool_input":{"command":"git commit -m test"}}' | bash "$GITHUB_WORKSPACE/hooks/secret-scanner.sh")"
+          echo "$OUT" | grep -q '"continue":false' || { echo "::error::secret-scanner did not block a staged credential"; exit 1; }
+          echo "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || { echo "::error::secret-scanner block output is not valid JSON"; exit 1; }
+          echo "staged credential blocked as expected"
+
+      - name: secret-scanner -- git -C <repo> commit form MUST also block
+        run: |
+          R="$(mktemp -d)"; git -C "$R" init -q
+          printf 'token = "AKIAIOSFODNN7EXAMPLE"\n' > "$R/config.py"
+          git -C "$R" add config.py
+          # cwd is the workspace, NOT the repo -- exercises the -C extraction branch
+          OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"git -C %s commit -m test"}}' "$R" | bash hooks/secret-scanner.sh)"
+          echo "$OUT" | grep -q '"continue":false' || { echo "::error::secret-scanner did not block the git -C form"; exit 1; }
+          echo "git -C form blocked as expected"
+
+      - name: secret-scanner -- clean staged diff MUST pass
+        run: |
+          R="$(mktemp -d)"; git -C "$R" init -q
+          printf 'GREETING = "hello"\n' > "$R/config.py"
+          git -C "$R" add config.py
+          OUT="$(cd "$R" && printf '{"tool_name":"Bash","tool_input":{"command":"git commit -m test"}}' | bash "$GITHUB_WORKSPACE/hooks/secret-scanner.sh")"
+          [ -z "$OUT" ] || { echo "::error::secret-scanner blocked a clean diff"; exit 1; }
+          echo "clean diff allowed as expected"
+
+      - name: secret-scanner -- non-commit command MUST pass untouched
+        run: |
+          OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"git status"}}' | bash hooks/secret-scanner.sh)"
+          [ -z "$OUT" ] || { echo "::error::secret-scanner intercepted a non-commit command"; exit 1; }
+          echo "non-commit command ignored as expected"
+
+      - name: python-format -- formats a Python file after Write (ruff present)
+        run: |
+          python3 -m pip install --user --quiet ruff==0.15.9 || pipx install ruff==0.15.9
+          F="$(mktemp -d)/sample.py"
+          printf 'x=1;y=2\n' > "$F"
+          printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$F" | bash hooks/python-format.sh
+          grep -q '^x = 1$' "$F" || { echo "::error::python-format did not format the file"; exit 1; }
+          echo "python file formatted as expected"
+
+      - name: python-format -- non-Python file MUST be untouched
+        run: |
+          F="$(mktemp -d)/notes.md"
+          printf '# heading\n' > "$F"
+          printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$F" | bash hooks/python-format.sh
+          grep -q '^# heading$' "$F" || { echo "::error::python-format touched a non-Python file"; exit 1; }
+          echo "non-Python file untouched as expected"
 
       - name: Ledger invariant -- NO row is SOFT (every lesson is gated)
         run: |
