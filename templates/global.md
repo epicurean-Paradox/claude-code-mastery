@@ -76,6 +76,11 @@ Extends "Git Conventions". One PR = one concern still holds; these sharpen *how 
 - Right before each new PR: `git checkout main && git pull`, then branch. Never branch off a stale local `main` or accidentally off another feature branch.
 - One branch = one concern. Never reuse a branch for an unrelated change, even a one-liner — open a new branch from fresh `main`.
 
+### Fold small changes
+
+- Don't open near-empty PRs: every PR — however trivial — burns a full CI cycle, and on a strict up-to-date rule forces every other open PR to rebase as it merges. Fold related small changes into ONE coherently-scoped PR.
+- This refines "one PR = one concern", it does not void it: the concern can be a small cluster of related edits landed together. Split only when the changes are genuinely independent concerns or sequence-dependent.
+
 ### Sequence-dependent PRs
 
 - When two PRs touch overlapping files, **merge the first before branching the second.** Branching the second off pre-merge `main` guarantees stacked-conflict churn at merge time (seen with `intake.py` / `set_status` across consecutive PRs).
@@ -106,6 +111,13 @@ Extends "Git Conventions". One PR = one concern still holds; these sharpen *how 
 ### Response gate
 
 - Before a PR is "ready": every bot comment (Gemini, Claude auto-review, any reviewer) gets either a fix commit or an inline reply referencing the fix commit. See LESSONS Lesson 1 — the severity gate decides what blocks merge; the response gate decides what you owe the reviewer.
+- Read the FULL top-level review bodies, not just inline threads — fetch both endpoints (issue comments AND pull-request reviews) untruncated. Reviewer bots post some findings inline and others only in the top-level body; the highest-severity finding can live exclusively there. Truncated previews are for triage, never for the gate. See LESSONS Lesson 20.
+- When two bot reviewers disagree, name a per-domain precedence in advance (e.g. the security-focused reviewer's verdict wins on security findings; the architecture-focused reviewer's wins on architecture-compliance findings) — don't relitigate the hierarchy per PR.
+
+### Drive the PR to merged
+
+- Opening a PR is not the deliverable — merging it is. The default cycle after opening: watch CI to green; address every bot comment (fix commit or justified reply — verify the bot's semantic claims against the spec first); resolve the review threads; merge; then verify the content actually landed (`git show origin/main:<path>`), not just the MERGED badge.
+- Don't stop at "PR open" and report, and don't ask whether to continue the cycle — hold a PR only when explicitly asked to.
 
 ## Multi-agent / Ultracode Usage
 
