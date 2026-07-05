@@ -39,5 +39,10 @@ if printf '%s\n' "$ARGS" | grep -qiE "$PATTERN"; then
 fi
 
 REASON=$(printf 'Unattended-loop launch BLOCKED (LESSONS Lesson 22).\nTool: %s\n\nThe launch input declares no stop primitive. Every unattended loop states, in its launch config/message, all three of:\n  1. a hard iteration cap (e.g. "stop after 10 iterations")\n  2. a hard budget cap (e.g. "budget: 500k tokens")\n  3. an escalation path (e.g. "on cap or stall, notify the operator and stop")\n\nRe-issue the call with the stop primitives stated in the prompt/config. Continuation is the default; termination must be engineered.' "$TOOL")
-jq -cn --arg r "$REASON" '{continue:false, stopReason:$r}'
+# PreToolUse DENY contract: {"decision":"block","reason":...} denies THIS tool
+# call and returns the reason to the model, letting it re-issue with caps.
+# ({"continue":false} halts the whole agent and, as observed 2026-07-05, does
+# NOT unwind a ScheduleWakeup side effect -- the wakeup still fired.)
+# Belt-and-suspenders: also emit the current permissionDecision form.
+jq -cn --arg r "$REASON" '{decision:"block", reason:$r, hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
 exit 0

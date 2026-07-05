@@ -63,7 +63,7 @@ jobs:
       - name: dev-server-guard -- backgrounded watcher MUST block (Lesson 14)
         run: |
           OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"npm run dev","run_in_background":true}}' | bash hooks/dev-server-guard.sh)"
-          echo "$OUT" | grep -q '"continue":false' || { echo "::error::dev-server-guard did not block"; exit 1; }
+          echo "$OUT" | grep -q '"decision":"block"' || { echo "::error::dev-server-guard did not block"; exit 1; }
           echo "backgrounded watcher blocked as expected"
 
       - name: dev-server-guard -- foreground start+kill MUST pass
@@ -105,7 +105,7 @@ jobs:
           printf 'aws_key = "AKIAIOSFODNN7EXAMPLE"\npassword = "hunter2hunter2"\n' > "$R/config.py"
           git -C "$R" add config.py
           OUT="$(cd "$R" && printf '{"tool_name":"Bash","tool_input":{"command":"git commit -m test"}}' | bash "$GITHUB_WORKSPACE/hooks/secret-scanner.sh")"
-          echo "$OUT" | grep -q '"continue":false' || { echo "::error::secret-scanner did not block a staged credential"; exit 1; }
+          echo "$OUT" | grep -q '"decision":"block"' || { echo "::error::secret-scanner did not block a staged credential"; exit 1; }
           echo "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || { echo "::error::secret-scanner block output is not valid JSON"; exit 1; }
           echo "staged credential blocked as expected"
 
@@ -116,7 +116,7 @@ jobs:
           git -C "$R" add config.py
           # cwd is the workspace, NOT the repo -- exercises the -C extraction branch
           OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"git -C %s commit -m test"}}' "$R" | bash hooks/secret-scanner.sh)"
-          echo "$OUT" | grep -q '"continue":false' || { echo "::error::secret-scanner did not block the git -C form"; exit 1; }
+          echo "$OUT" | grep -q '"decision":"block"' || { echo "::error::secret-scanner did not block the git -C form"; exit 1; }
           echo "git -C form blocked as expected"
 
       - name: secret-scanner -- clean staged diff MUST pass
@@ -159,7 +159,7 @@ jobs:
       - name: loop-cap-guard -- capless loop launch MUST block (Lesson 22)
         run: |
           OUT="$(printf '{"tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":1200,"reason":"keep working","prompt":"continue the sweep"}}' | bash hooks/loop-cap-guard.sh)"
-          echo "$OUT" | grep -q '"continue":false' || { echo "::error::loop-cap-guard did not block a capless launch"; exit 1; }
+          echo "$OUT" | grep -q '"decision":"block"' || { echo "::error::loop-cap-guard did not block a capless launch"; exit 1; }
           echo "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || { echo "::error::loop-cap-guard block output is not valid JSON"; exit 1; }
           echo "capless launch blocked as expected"
 
@@ -172,7 +172,7 @@ jobs:
       - name: loop-cap-guard -- capless CronCreate MUST block
         run: |
           OUT="$(printf '{"tool_name":"CronCreate","tool_input":{"schedule":"0 9 * * *","prompt":"check the deploys"}}' | bash hooks/loop-cap-guard.sh)"
-          echo "$OUT" | grep -q '"continue":false' || { echo "::error::loop-cap-guard did not block a capless cron"; exit 1; }
+          echo "$OUT" | grep -q '"decision":"block"' || { echo "::error::loop-cap-guard did not block a capless cron"; exit 1; }
           echo "capless cron blocked as expected"
 
       - name: loop-cap-guard -- non-scheduling tool MUST pass untouched

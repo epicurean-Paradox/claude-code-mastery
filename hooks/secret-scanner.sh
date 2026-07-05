@@ -48,7 +48,11 @@ FOUND=$(printf '%s\n' "$ADDED" | grep -iE "$PATTERN" || true)
 
 if [ -n "$FOUND" ]; then
     REASON=$(printf 'Secret/credential pattern detected in staged diff (LESSONS Lesson 13).\nRun: git diff --staged\nReview the flagged lines before committing. If a value already left the machine, vaulting or history-scrubbing does not close the exposure -- only issuer-side rotation + revocation does.')
-    jq -cn --arg r "$REASON" '{continue:false, stopReason:$r}'
+    # PreToolUse DENY contract: {"decision":"block",...} denies THIS commit call
+    # and returns the reason to the model. {"continue":false} halts the whole
+    # agent and does not reliably unwind a tool side effect (proven on
+    # ScheduleWakeup, 2026-07-05).
+    jq -cn --arg r "$REASON" '{decision:"block", reason:$r, hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
     exit 0
 fi
 
