@@ -151,6 +151,36 @@ jobs:
           grep -q '^# heading$' "$F" || { echo "::error::python-format touched a non-Python file"; exit 1; }
           echo "non-Python file untouched as expected"
 
+      - name: loop-cap-guard -- syntax + shellcheck
+        run: |
+          bash -n hooks/loop-cap-guard.sh
+          shellcheck -S error hooks/loop-cap-guard.sh
+
+      - name: loop-cap-guard -- capless loop launch MUST block (Lesson 22)
+        run: |
+          OUT="$(printf '{"tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":1200,"reason":"keep working","prompt":"continue the sweep"}}' | bash hooks/loop-cap-guard.sh)"
+          echo "$OUT" | grep -q '"continue":false' || { echo "::error::loop-cap-guard did not block a capless launch"; exit 1; }
+          echo "$OUT" | python3 -c 'import json,sys; json.load(sys.stdin)' || { echo "::error::loop-cap-guard block output is not valid JSON"; exit 1; }
+          echo "capless launch blocked as expected"
+
+      - name: loop-cap-guard -- launch declaring stop primitives MUST pass
+        run: |
+          OUT="$(printf '{"tool_name":"ScheduleWakeup","tool_input":{"delaySeconds":1200,"reason":"iteration 3 of max 5, budget 200k tokens, escalate to operator on stall","prompt":"continue"}}' | bash hooks/loop-cap-guard.sh)"
+          [ -z "$OUT" ] || { echo "::error::loop-cap-guard blocked a properly capped launch"; exit 1; }
+          echo "capped launch allowed as expected"
+
+      - name: loop-cap-guard -- capless CronCreate MUST block
+        run: |
+          OUT="$(printf '{"tool_name":"CronCreate","tool_input":{"schedule":"0 9 * * *","prompt":"check the deploys"}}' | bash hooks/loop-cap-guard.sh)"
+          echo "$OUT" | grep -q '"continue":false' || { echo "::error::loop-cap-guard did not block a capless cron"; exit 1; }
+          echo "capless cron blocked as expected"
+
+      - name: loop-cap-guard -- non-scheduling tool MUST pass untouched
+        run: |
+          OUT="$(printf '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | bash hooks/loop-cap-guard.sh)"
+          [ -z "$OUT" ] || { echo "::error::loop-cap-guard intercepted a non-scheduling tool"; exit 1; }
+          echo "non-scheduling tool ignored as expected"
+
       - name: Ledger invariant -- NO row is SOFT (every lesson is gated)
         run: |
           N="$(grep -cE '\| SOFT \|' LEDGER.md || true)"
