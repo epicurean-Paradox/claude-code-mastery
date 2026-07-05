@@ -34,7 +34,11 @@ echo "$CMD" | grep -qE '(^|[^&])&[[:space:]]*$' && BGAMP=yes
 
 if [ "$BG" = "true" ] || [ "$BGAMP" = "yes" ]; then
   REASON=$(printf 'Backgrounded dev server BLOCKED (LESSONS Lesson 14).\nCommand: %s\n\nA file-watching dev server run in the background is not reaped when the turn ends; rooted at the wrong dir it grows without bound (one leaked past 65 GB RAM).\n\nDo NOT background it. Start + probe + kill in ONE foreground command so it dies with the turn, e.g.\n  ( npm run dev >/tmp/dev.log 2>&1 & P=$!; sleep 4; curl -sf localhost:3000 >/tmp/out; kill "$P" )\nor let the test runner own the server lifecycle. Sweep `pgrep -fl vite` / `docker ps` at session end.' "$CMD")
-  jq -cn --arg r "$REASON" '{continue:false, stopReason:$r}'
+  # PreToolUse DENY contract: {"decision":"block",...} denies THIS tool call and
+  # returns the reason to the model (which then adapts -- e.g. foreground the
+  # server). {"continue":false} halts the whole agent and does not reliably
+  # unwind a tool side effect (proven on ScheduleWakeup, 2026-07-05).
+  jq -cn --arg r "$REASON" '{decision:"block", reason:$r, hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
   exit 0
 fi
 
