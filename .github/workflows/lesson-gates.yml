@@ -181,6 +181,46 @@ jobs:
           [ -z "$OUT" ] || { echo "::error::loop-cap-guard intercepted a non-scheduling tool"; exit 1; }
           echo "non-scheduling tool ignored as expected"
 
+      - name: scaffold hooks -- syntax + shellcheck (previously uncovered)
+        run: |
+          bash -n hooks/prototype-scaffold-guard.sh
+          bash -n hooks/lesson-loop-audit.sh
+          shellcheck -S error hooks/prototype-scaffold-guard.sh hooks/lesson-loop-audit.sh
+
+      - name: scaffold regex -- plain "to navigate" prose MUST pass (Lesson 3 FP)
+        run: |
+          OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/x/frontend/src/components/Foo.tsx","content":"/** Internal route path to navigate to on Enter / click. */"}}' | bash hooks/prototype-scaffold-guard.sh)"
+          [ -z "$OUT" ] || { echo "::error::guard blocked a legitimate docstring (the CommandPalette/NotificationBell false positive)"; exit 1; }
+          echo "legitimate 'to navigate' docstring allowed as expected"
+
+      - name: scaffold regex -- glyph nav-hint + stepper MUST block (Lesson 3)
+        run: |
+          OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/x/frontend/src/components/Foo.tsx","content":"<span>← → to navigate</span>"}}' | bash hooks/prototype-scaffold-guard.sh)"
+          echo "$OUT" | grep -q '"continue":false' || { echo "::error::guard did not block the ← → nav-hint copy"; exit 1; }
+          OUT2="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/x/frontend/src/components/Foo.tsx","content":"PAGE 0 OF 3"}}' | bash hooks/prototype-scaffold-guard.sh)"
+          echo "$OUT2" | grep -q '"continue":false' || { echo "::error::guard did not block the stepper eyebrow"; exit 1; }
+          echo "scaffold copy blocked as expected"
+
+      - name: scaffold regex -- write-time guard and detector MUST stay in sync
+        run: |
+          A="$(grep -m1 '^SCAFFOLD_RE=' hooks/prototype-scaffold-guard.sh)"
+          B="$(grep -m1 '^SCAFFOLD_RE=' hooks/lesson-loop-audit.sh)"
+          [ "${A#*=}" = "${B#*=}" ] || { echo "::error::SCAFFOLD_RE drifted between prototype-scaffold-guard.sh and lesson-loop-audit.sh"; exit 1; }
+          echo "SCAFFOLD_RE in sync across both hooks"
+
+      - name: evidence-audit -- SessionStart digest is scoped to the CURRENT project
+        run: |
+          FAKE="${RUNNER_TEMP:-/tmp}/scopehome"; rm -rf "$FAKE"
+          P="$FAKE/.claude/projects"
+          mkdir -p "$P/-tmp-scopetest" "$P/-other-project" /tmp/scopetest
+          cp hooks/test-fixtures/fail_untagged_diagnosis.jsonl "$P/-other-project/other.jsonl"
+          OUT="$(cd /tmp/scopetest && HOME="$FAKE" bash "$GITHUB_WORKSPACE/hooks/evidence-audit.sh")"
+          [ -z "$OUT" ] || { echo "::error::digest surfaced ANOTHER project's claims (cross-project misattribution)"; exit 1; }
+          cp hooks/test-fixtures/fail_untagged_diagnosis.jsonl "$P/-tmp-scopetest/own.jsonl"
+          OUT2="$(cd /tmp/scopetest && HOME="$FAKE" bash "$GITHUB_WORKSPACE/hooks/evidence-audit.sh")"
+          echo "$OUT2" | grep -q 'own.jsonl' || { echo "::error::digest missed the current project's own claims"; exit 1; }
+          echo "digest scoped to the current project as expected"
+
       - name: Ledger invariant -- NO row is SOFT (every lesson is gated)
         run: |
           N="$(grep -cE '\| SOFT \|' LEDGER.md || true)"

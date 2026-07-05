@@ -6,13 +6,20 @@ set -uo pipefail
 
 LEDGER="$HOME/claude-code-mastery/LEDGER.md"
 FRONTEND="$HOME/npm-dashboard/frontend/src"
-SCAFFOLD_RE='PAGE[[:space:]]+[0-9]+[[:space:]]+OF[[:space:]]+[0-9]+|(←[[:space:]]*→|to navigate)|StageLabel|(HAPPY|NON-?HAPPY|WARN|ERROR)[[:space:]]*(・|·|\|)[[:space:]]*[0-9N]'
+# NOTE: the nav-hint branch requires the ← → arrow PAIR. A bare "to navigate"
+# is ordinary English (matched two legitimate docstrings in npm-dashboard:
+# CommandPalette.tsx JSDoc + NotificationBell.tsx security comment) -- the
+# prototype hint copy always carries the glyphs ("← → to navigate").
+SCAFFOLD_RE='PAGE[[:space:]]+[0-9]+[[:space:]]+OF[[:space:]]+[0-9]+|←[[:space:]]*→|StageLabel|(HAPPY|NON-?HAPPY|WARN|ERROR)[[:space:]]*(・|·|\|)[[:space:]]*[0-9N]'
 
 OUT=""
 
 # 1. Open defects: SOFT (ungated) lessons in the ledger.
 if [ -f "$LEDGER" ]; then
-  SOFT=$(grep -cE '\| SOFT \|' "$LEDGER" 2>/dev/null || echo 0)
+  # grep -c prints the count even when it exits 1 (zero matches) -- an
+  # `|| echo 0` fallback would double-print ("0\n0") and break -gt below.
+  SOFT=$(grep -cE '\| SOFT \|' "$LEDGER" 2>/dev/null || true)
+  SOFT="${SOFT:-0}"
   [ "$SOFT" -gt 0 ] && OUT="${OUT}lesson-ledger: ${SOFT} lessons still SOFT (ungated = open defects). See ~/claude-code-mastery/LEDGER.md."$'\n'
 fi
 
