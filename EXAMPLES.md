@@ -550,6 +550,7 @@ Same shape: gradient + gate.
 
 - **Pattern 8 (Documentation Cadence)** is the symptom-side detector — the 5-PR audit catches plan / runtime drift. Pattern 12 is the structural fix.
 - **Pattern 11 (Delegation Poker)** is the meta-layer: even with the gate installed, the operator decides when to *upgrade* the level so the AI can run the deploy itself.
+- **External precedent**: OpenAI's open-source Symphony orchestrator (github.com/openai/symphony) ships the same shape at product scale — always-on agents driven from an issue tracker with a mandatory human-review gate before anything lands.
 
 ---
 
@@ -795,3 +796,153 @@ The remedy was structural: correct the plan row from DONE to PARTIAL with the fi
 The gate was green, so nothing drew attention to it. Green is the camouflage. The only thing that surfaces a test asserting the wrong behaviour is a human or agent reading the assertion against the spec -- which is why "has a passing test" and "does the intended thing" must be checked as two separate claims.
 
 (Pairs with LESSONS Lesson 16 -- a green test can certify the wrong behaviour -- and Lesson 11 -- the badge is not the outcome.)
+
+## 19. Subagent Model Routing: the Fan-Out Silently Bills at the Parent's Tier
+
+### Problem: A Default Nobody Chose Decides the Spend
+
+Claude Code resolves a subagent's model in this order (official docs, fetched 2026-07-05): (1) the `CLAUDE_CODE_SUBAGENT_MODEL` environment variable, (2) the per-invocation `model` parameter, (3) the subagent definition's `model` frontmatter, (4) the main conversation's model. The frontmatter field defaults to `inherit` -- "uses the same model as the main conversation." The Agent SDK mirrors it: AgentDefinition.model "Defaults to main model if omitted."
+
+Consequence: run the main loop on a top-tier model and every subagent that no layer above (4) overrides runs on that same top-tier model. A review council of 8 agents is 8 top-tier context windows, not 1. Nothing in the transcript flags it -- the badge (subagent ran, returned a summary) looks identical at every tier. **Runtime-verified 2026-07-05**: an un-overridden general-purpose subagent spawned from a Fable 5 main session recorded `claude-fable-5` in its transcript JSONL -- the doc's claim, observed live (Lesson 11: the doc is the badge; the transcript's model field is the outcome).
+
+Exceptions that keep "every subagent" from being literally true:
+- Built-in Explore inherits but is capped at Opus on the Claude API; on any other provider (Bedrock, Vertex, Foundry) it inherits the main model directly -- the cap does NOT protect a Bedrock-billed stack (see Example 14 on which surface bills where).
+- Some built-in helpers run fixed models (e.g. statusline-setup, claude-code-guide).
+- An org `availableModels` allowlist can veto an explicit frontmatter/env value, and the subagent then falls back to the inherited model -- an override that silently un-overrides.
+
+### The Fork You Can't Cheapen
+
+Two spawn types answer the routing question oppositely (docs fetched 2026-07-05):
+
+|                         | Fork                             | Named subagent                        |
+| :---------------------- | :------------------------------- | :------------------------------------ |
+| Context                 | Full conversation history        | Fresh context with the prompt passed  |
+| System prompt and tools | Same as main session             | From the subagent's definition file   |
+| Model                   | Same as main session             | From the subagent's `model` field     |
+| Prompt cache            | Shared with main session         | Separate cache                        |
+
+- No fork model override exists as of the doc snapshot: the documented fork parameter surface has no `model`, and typing `/model` in a fork's transcript view changes the MAIN conversation's model. "Cannot be routed" is an absence-of-mechanism claim anchored to 2026-07-05 -- re-verify against the CHANGELOG before relying on it.
+- A fork is not simply the expensive option: its first request reuses the parent's prompt cache -- the docs call forking "cheaper than spawning a fresh subagent for tasks that need the same context." The real trade: fork = parent model + full conversation + cache-discounted input, for side tasks needing the whole situation and parent-grade judgment; named subagent = any model + fresh context + separate cache, for narrow tasks a cheaper tier can execute from a self-contained brief. Routing a context-heavy side task to a cheap named subagent forces you to re-explain everything the fork would have inherited -- sometimes costing more than the tier discount saves.
+
+### The Naming Trap: a Skill's `context: fork` Is Not a Fork
+
+The skills doc reuses the word for the opposite semantics. A skill with `context: fork` runs in an ISOLATED subagent -- no conversation history -- and its `agent:` field determines the execution environment (model, tools, permissions). Point `agent:` at a custom subagent whose definition sets `model: haiku` and the skill runs cheap. Same word, opposite answer on both axes. Any routing rule you write must name which "fork" it governs.
+
+### Fix: Make the Model an Explicit Field, Not an Inherited Accident
+
+The defect is not "expensive model" -- resources are neutral, and a judgment-heavy verify pass may need exactly the parent's tier. The defect is the tradeoff being decided silently by a default: the same failure shape as Lesson 15, where the human owns the cost/accuracy tradeoff and never gets to have it silently decided -- in either direction. Down-tiering a judgment-heavy checker to save tokens is the mirrored version of the same mistake.
+
+Verified mechanics for the explicit field (docs + installed sdk-tools.d.ts, 2026-07-05): frontmatter `model:` accepts an alias (`haiku`, `sonnet`, `opus`, `fable`), a full model ID, or `inherit`; the Agent tool's per-invocation `model` param takes precedence over frontmatter; `effort:` overrides the session effort level per agent (docs list low/medium/high/xhigh/max; one probe of an installed binary's embedded schema omitted xhigh -- the enum is version- and model-bound, re-verify on the installed build before quoting it as exact).
+
+Enforcement, because a lesson that is not a gate gets re-violated (Lesson 17):
+1. Every custom subagent definition declares `model:` explicitly. `model: inherit` is legitimate -- but written down, so the choice is visible in review, not implied by omission.
+2. Any fan-out (review council, sweep, Ultracode run) states agent count x model tier next to the coverage statement Lesson 7 already requires.
+3. Route by AMBIGUITY, not task size: top tier for planning, architecture, judgment calls, final verification; mid tier for standard codegen and exploration; bottom tier only for lookup-shaped tasks. Exploration floor is the mid tier -- a confidently-wrong cheap summary the orchestrator trusts costs more than it saves.
+4. Anything that must be cheap must not be a `fork`.
+5. Non-Anthropic models are not a native alias. Some third-party providers publish Anthropic-compatible endpoints reachable via environment variables alone; others need an external CLI wired as a subprocess. Either way it is an integration decision, not a frontmatter value -- verify the specific provider's path before planning around it.
+
+### Provenance
+
+The mechanism is doc-verified and runtime-verified as noted above. The framing that surfaced it ("what Anthropic engineers use", specific price ratios) came from an X-research sweep whose own raw notes mark those UNVERIFIED -- the posts remain DATA; everything above cites the official docs, the installed schema, or a first-hand runtime probe. Cost-magnitude language is deliberately absent: no per-token price appears here because no pricing primary was fetched.
+
+### Pairing With Other Patterns
+
+- Lesson 7 -- agent count is one cost axis; per-agent model tier is the other.
+- Lesson 11 -- the doc is the badge; the model ID recorded in the subagent's transcript JSONL is the outcome.
+- Lesson 15 -- silent defaults must not decide the human's cost/accuracy tradeoff.
+- Example 14 -- which auth/billing surface the subagent runs on decides whether the Opus cap even applies.
+
+## 20. /goal Is the Native End-State Gate -- and "Achieved" Is Still a Badge
+
+### Problem: Autonomy With No Machine-Checked Stop Condition
+
+Example 12's build/ship trap and Lesson 17's re-violated lessons share a root cause: an autonomous loop whose "done" was decided by the same model doing the work. Until now this repo's fixes were externally wired -- CI receipt gates, Stop hooks, checklist lines. Claude Code ships a native mechanism: `/goal <condition>` (official docs at code.claude.com/docs/en/goal; present in the installed CLI, string-probed 2026-07-05: "/goal <condition> to set another", "/goal clear to stop early", "/goal is only available in trusted workspaces"). It sets a completion condition; after every turn a separate small fast model judges whether the condition holds, re-prompts Claude with the reason if not, and clears the goal when it does. `claude -p "/goal <condition>"` drives the loop to completion in a single invocation.
+
+### Fix: Use /goal as the Gate, and Verify Its "Achieved" Like Any Other Badge
+
+Two facts from the official docs decide how to use it safely:
+
+1. **The evaluator does not call tools.** It judges ONLY what Claude has surfaced in the transcript. A condition that does not name its own ground-truth check is grading claims, not outcomes -- Lesson 11 applied at the goal layer.
+2. **Completion is decided by a fresh model, not the one doing the work** -- structurally the right separation (checker != worker), but still a model reading a transcript, not a probe of live state.
+
+So a condition needs all three of:
+
+```text
+# One measurable end state + a stated check + constraints that must hold
+/goal all tests in test/auth pass -- prove it: `npm test` exits 0 in the transcript;
+no file outside test/auth or src/auth is modified (`git status` shown clean of others);
+or stop after 20 turns
+```
+
+And when the loop reports achieved, run the one downstream probe before reporting done (Example 15's table): the goal-achieved entry certifies the transcript convinced a small model, not that the remote has your SHA or the deploy ran.
+
+Mechanism notes worth knowing before relying on it: `/goal` is a wrapper around a session-scoped prompt-based Stop hook, so it is unavailable when `disableAllHooks` or `allowManagedHooksOnly` is set (the installed CLI's own strings confirm: "/goal can't run while hooks are restricted"); one goal per session; a goal still active at session end is restored on `--resume`. [hypothesis: full end-to-end behavior (per-turn evaluator reason, auto-clear, non-interactive completion) is doc- and string-verified, not yet observed in a live /goal cycle -- run one in a scratch workspace before load-bearing use.]
+
+**Cross-refs**: Lesson 17 -- a nameable native enforcement mechanism, removing one excuse for a lesson with no gate. Lesson 22 -- /goal's condition can carry the iteration cap ("or stop after N turns"). Example 12 -- a lighter-weight alternative to the CI receipt gate. Example 11 -- a goal set before a newer operator directive is a stale prompt; the directive governs. Lesson 11 -- the achieved badge gets its own probe.
+
+**Provenance**: surfaced via a third-party "god mode" brief (untrusted DATA; its GitHub skill fails the skill-security gate and must not be installed -- see Lesson 21); every operational claim above is grounded on the official docs and the installed CLI only.
+
+## 21. The Harness Is Half the Benchmark
+
+### Problem: A Leaderboard Number Read as a Model Property
+
+"Model M scores 65% on benchmark B" reads like a fact about M. It is not -- it is a fact about a system: model + harness + environment + feedback loop. arXiv:2606.17799 ("Position: Coding Benchmarks Are Misaligned with Agentic Software Engineering"; full text fetched and Table 1 re-verified 2026-07-05) extracts TerminalBench leaderboard entries for a single fixed model, Claude Opus 4.6, across 9 different agent harnesses on the same task distribution:
+
+```
+Agent           Org             Accuracy
+ForgeCode       ForgeCode       79.8 +- 1.6
+Capy            Capy            75.3 +- 2.4
+Terminus-KIRA   KRAFTON AI      74.7 +- 2.6
+TongAgents      Bigai           71.9 +- 2.7
+Droid           Factory         69.9 +- 2.5
+Crux            Roam            66.9 (N/A)
+Mux             Coder           66.5 +- 2.5
+Terminus 2      Terminal-Bench  62.9 +- 2.7
+Claude Code     Anthropic       58.0 +- 2.9
+```
+
+Same model, 21.8-point spread -- a range the paper notes is "comparable to differences between model generations". The harness moved the score as much as swapping the model would have.
+
+### Fix: Treat Every Single-Number Model Claim as Under-Specified
+
+- A benchmark or leaderboard score attributed to a model alone is a claim about a system with the system half redacted. Before acting on "model X beats model Y", check whether the harness was held constant; if it wasn't, you are comparing two systems, not two models.
+- The harness you operate -- CLAUDE.md gates, hooks, skills, memory files, verification loops -- is a performance component of model-generation magnitude, not process bureaucracy. This table is the external empirical grounding for that premise.
+- When an agentic tool underperforms, the harness layer is a suspect of the same rank as the model. Interrogate scaffold, context assembly, and stop conditions before concluding "the model got worse" (pairs with Example 16: diagnose at the layer that actually failed).
+
+### Provenance and Caveats (kept, because they bound the claim)
+
+- Primary source reached and extracted directly: arxiv.org/html/2606.17799 fetched, Table 1 parsed. The social corpus cited two inconsistent arXiv IDs (2606.10209 vs 2606.17799); both were probed and the wrong one eliminated -- the trust rule in action, resolve the ID before citing.
+- Position paper by a vendor whose commercial thesis is that current benchmarks are broken. The table data is TerminalBench leaderboard compilation, not the authors' own runs.
+- Leaderboard rows are per-org submissions; run configs (token budgets, retries, parallelism) are not normalized in the table. The spread is real on the leaderboard; its causal decomposition (pure harness design vs submission-config differences) is not established by the table alone. [hypothesis: the live leaderboard (tbench.ai) has not been probed first-hand -- the paper is one hop from the primary data; snapshot the relevant rows before citing the numbers anywhere load-bearing.]
+- The paper's prose says "four agent harnesses" against its own 9-row table -- an editing artifact. Cite the table, not the prose.
+
+### Pairing With Other Patterns
+
+- Example 5 (Ground Truth Verification): the score you can verify is the system's, not the model's -- state which system.
+- Example 7 (Bot Reviews Need Verification): a confident number gets traced to its primary source before it shapes a decision.
+- Lesson 11 (badge != outcome): a leaderboard rank is a badge; the outcome is behaviour under YOUR harness. Benchmark on your own stack before switching models on the strength of someone else's number.
+- Lesson 24 (summary-layer upgrades): this same paper's finding was inflated from "comparable" to "harness > model" by a downstream brief -- the two entries are the same incident seen from the source side and the artifact side.
+
+## 22. The "Not Sponsored" Disclosure That Was Also an Ad
+
+### Problem: Disclosure Verified True, Incentive Never Recorded
+
+Two tutorial videos enter a content-ingestion pipeline as sources of build-workflow claims. Both carry explicit no-sponsorship disclosures, and both verify TRUE against the transcripts ("Not Affiliated Or Sponsored By ..."; "None Of The Videos Are Sponsored So All The Tools That I'll Be Sharing You Are Just Because I Use Them"). The skeptic pass marks the disclosure claim verified-true and moves on. But both videos funnel viewers, repeatedly, to one product site -- and the creator narrates the funnel as his own growth technique ("provide value first, then put the call to action inside of description"). A product-launch registry names him the product's maker, in his own words.
+
+Nothing here is false. "Not sponsored" is literally true -- nobody paid him. But the videos are, structurally, lead generation for a product he owns, and every tool recommendation ingested from them now carries an implicit "disinterested source" tag it never earned.
+
+### Fix: Verify the Disclosure AND Trace the Funnel Ownership
+
+"No third-party sponsorship" and "no commercial incentive" are independent states -- track them separately, the same way Lesson 13 tracks migrated and rotated as independent states for a leaked secret. Verifying one does not discharge the other.
+
+Concrete probes, one per state:
+
+1. Disclosure state: grep the transcript for the disclosure and pin the line numbers.
+2. Incentive state: list every product/URL the source funnels to, then run an ownership probe on each -- fetch the product page (an owner-less product page is signal, not absence), then a launch/registry source (maker section, launch post). A funnel target owned by the source = first-party incentive.
+3. Record the incentive as source metadata ("author owns <funnel target>; videos double as lead-gen") so every downstream claim ingested from that source inherits the tag and gets weighted accordingly -- especially the source's tool choices and "just because I use them" recommendations.
+
+[hypothesis: in the motivating case the author-to-maker identity linkage rests on name match + the maker's own "creator of ..." comment + the videos' funnels -- strong but inferential until a reachable cross-link (bio link, authenticated launch-post read) pins it; archive the registry's maker section, since it is the load-bearing ownership source and can change.]
+
+### Heuristic
+
+A no-sponsorship disclosure scopes exactly one incentive channel: third-party payment. The trigger for the ownership probe is any recurring funnel to a named product in "not sponsored" content. Literally-true disclosure + first-party funnel = the content is an advertisement for the funnel target; ingest its claims with the incentive tag attached, never as disinterested testimony.

@@ -39,6 +39,9 @@ Two detection mechanisms now run without depending on the operator noticing:
   the staged diff contains credential patterns (AWS keys, PEM blocks, assigned
   secrets/passwords/tokens) -- the write-time end of Lesson 13. gitleaks in CI is the
   push-time end; issuer-side rotation is still the only true close once a value leaked.
+- **`loop-cap-guard.sh`** (PreToolUse `CronCreate|ScheduleWakeup`) -- *enforcement*:
+  blocks scheduling an unattended loop iteration whose input declares no stop primitive
+  (iteration cap, budget cap, expiry, or escalation path) -- Lesson 22's launch-time end.
 - **`precompact-archive.sh`** (PreCompact) -- *preservation*: snapshots the full transcript
   to `~/.claude/precompact-archives/` before the SDK summarizes older turns. Closes the
   blind spot where the transcript-scanning audits above read exactly the history that
@@ -68,6 +71,10 @@ Two detection mechanisms now run without depending on the operator noticing:
 | 18 | The merge gate only sees the checks you made required | **HARD** | Branch-protection `required_status_checks` now includes the class-specific jobs (visual regression + real-data e2e) -- the platform refuses the merge regardless of any poller. Merge-checklist line: new CI job -> is it in the required set? Built 2026-07-02 |
 | 19 | Clean source, green deploy, correct API -- UI still wrong | SEMI | Layer-probe checklist (DB -> authed API -> pulled-image byte-diff -> duplicate-identity fixture repro) + auto-loading memory entry; duplicate-identity fixtures pin the shipped bug's regression (HARD for that instance). Judgment-heavy like L11 -- the honest close is the forced probe order, not a hook |
 | 20 | HIGHs can live only in the top-level review body | SEMI | Response-gate step: fetch FULL issue-comment + review bodies (both endpoints, untruncated), grep severity markers, reconcile each against a fix or reply; *next gate*: a merge-poller step that fails on any unreconciled HIGH match in a review body |
+| 21 | A "paste this to your agent" installer is an injection payload | SEMI | CLAUDE.md Fetch-Time Injection Rule (fetched third-party content = DATA; agent-addressed imperatives reported, never executed) + Skill Security Gate auto-REJECT for agent-driven installers (absolute -- no operator override, the audit a gate would rely on lags payload edits); *next gate*: a fetch-wrapper hook that applies the inert-data framing mechanically |
+| 22 | An unattended loop without hard stop conditions ends by accident | **HARD** | `hooks/loop-cap-guard.sh` (PreToolUse on scheduling tools: CronCreate / ScheduleWakeup) blocks a launch whose input declares no stop primitive (iteration cap, budget cap, expiry, or escalation path) + CLAUDE.md loop-launch gate. Built 2026-07-05 |
+| 23 | A quote-tweet of the primary source is not the primary source | SEMI | Trust-tier rule: a reachable primary (live URL or archive capture + verbatim sentence) recorded at the callsite before any trust-tier placement; distillation may never drop a raw caveat; *next gate*: `evidence-audit.sh` attribution family ("per <org>", "<name> said", precise stats stated as fact with no primary URL or inline [claim:] tag) |
+| 24 | The summary layer upgrades the claim the body hedged | SEMI | Distillation checklist: diff every summary/next-steps/handoff claim against its body line before finalizing -- any strength upgrade is a defect; *next gate*: `evidence-audit.sh` promotion-words check ("hard evidence", "proves", "confirms" attached to a source marked unresolved/unread/flagged elsewhere in the same document) |
 
 ## Cadence
 
