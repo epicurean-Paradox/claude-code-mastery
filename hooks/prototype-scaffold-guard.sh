@@ -34,10 +34,12 @@ CONTENT=$(echo "$INPUT" | jq -r '
 
 # Unambiguous prototype-scaffold signatures (low false-positive):
 #  - the multi-step state-gallery stepper ("PAGE 0 OF 3")
-#  - the reviewer keyboard-navigation hint
+#  - the reviewer keyboard-navigation hint (the ← → arrow pair; a bare
+#    "to navigate" is ordinary English and false-positives on legitimate
+#    docstrings -- the prototype copy always carries the glyphs)
 #  - the StageLabel component / its "HAPPY 01" banners
 #  - designer state codes addressed to the prototype's reader
-SCAFFOLD_RE='PAGE[[:space:]]+[0-9]+[[:space:]]+OF[[:space:]]+[0-9]+|(←[[:space:]]*→|to navigate)|StageLabel|(HAPPY|NON-?HAPPY|WARN|ERROR)[[:space:]]*(・|·|\|)[[:space:]]*[0-9N]'
+SCAFFOLD_RE='PAGE[[:space:]]+[0-9]+[[:space:]]+OF[[:space:]]+[0-9]+|←[[:space:]]*→|StageLabel|(HAPPY|NON-?HAPPY|WARN|ERROR)[[:space:]]*(・|·|\|)[[:space:]]*[0-9N]'
 HITS=$(echo "$CONTENT" | grep -inE "$SCAFFOLD_RE" 2>/dev/null | head -5 || true)
 
 if [ -n "$HITS" ]; then

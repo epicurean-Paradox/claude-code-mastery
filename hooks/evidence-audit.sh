@@ -36,7 +36,16 @@ fi
 
 PROJECTS="$HOME/.claude/projects"
 if [ -d "$PROJECTS" ]; then
-  FILES="$(find "$PROJECTS" -maxdepth 2 -name '*.jsonl' -type f -print0 2>/dev/null \
+  # Scope the SessionStart digest to the CURRENT project's transcripts.
+  # A global newest-2 scan surfaces OTHER projects' claims as if they were
+  # this project's (observed: a Telos-ONG transcript flagged inside an
+  # npm-dashboard session; the misattribution then propagated into a
+  # cross-project note). Transcript dirs are the session cwd with every
+  # non-alphanumeric mapped to '-'; fall back to the global scan only if
+  # that mapping misses.
+  SCOPE="$PROJECTS/$(pwd | sed 's|[^A-Za-z0-9]|-|g')"
+  [ -d "$SCOPE" ] || SCOPE="$PROJECTS"
+  FILES="$(find "$SCOPE" -maxdepth 2 -name '*.jsonl' -type f -print0 2>/dev/null \
             | xargs -0 ls -t 2>/dev/null | head -2)"
   if [ -n "$FILES" ]; then
     # shellcheck disable=SC2086
