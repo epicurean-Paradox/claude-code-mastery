@@ -876,7 +876,7 @@ or stop after 20 turns
 
 And when the loop reports achieved, run the one downstream probe before reporting done (Example 15's table): the goal-achieved entry certifies the transcript convinced a small model, not that the remote has your SHA or the deploy ran.
 
-Mechanism notes worth knowing before relying on it: `/goal` is a wrapper around a session-scoped prompt-based Stop hook, so it is unavailable when `disableAllHooks` or `allowManagedHooksOnly` is set (the installed CLI's own strings confirm: "/goal can't run while hooks are restricted"); one goal per session; a goal still active at session end is restored on `--resume`. [hypothesis: full end-to-end behavior (per-turn evaluator reason, auto-clear, non-interactive completion) is doc- and string-verified, not yet observed in a live /goal cycle -- run one in a scratch workspace before load-bearing use.]
+Mechanism notes worth knowing before relying on it: `/goal` is a wrapper around a session-scoped prompt-based Stop hook, so it is unavailable when `disableAllHooks` or `allowManagedHooksOnly` is set (the installed CLI's own strings confirm: "/goal can't run while hooks are restricted"); one goal per session; a goal still active at session end is restored on `--resume`. [hypothesis: full end-to-end behavior (per-turn evaluator reason, auto-clear, non-interactive completion) is doc- and CLI-string-verified; a live cycle was attempted 2026-07-05 via a nested `claude -p '/goal ...'` in a scratch dir and was inconclusive -- the nested headless process hung under the surrounding turn timeout with no observable output (a nested-CLI footgun, not evidence about /goal itself). Observe it in an interactive session before load-bearing use.]
 
 **Cross-refs**: Lesson 17 -- a nameable native enforcement mechanism, removing one excuse for a lesson with no gate. Lesson 22 -- /goal's condition can carry the iteration cap ("or stop after N turns"). Example 12 -- a lighter-weight alternative to the CI receipt gate. Example 11 -- a goal set before a newer operator directive is a stale prompt; the directive governs. Lesson 11 -- the achieved badge gets its own probe.
 
@@ -890,8 +890,8 @@ Mechanism notes worth knowing before relying on it: `/goal` is a wrapper around 
 
 ```
 Agent           Org             Accuracy
-ForgeCode       ForgeCode       79.8 +- 1.6
-Capy            Capy            75.3 +- 2.4
+ForgeCode       ForgeCode       79.8 +- 1.6   (paper-only; NOT on live tbench 2.0 as of 2026-07-05)
+Capy            Capy            75.3 +- 2.4   <- live-verified top
 Terminus-KIRA   KRAFTON AI      74.7 +- 2.6
 TongAgents      Bigai           71.9 +- 2.7
 Droid           Factory         69.9 +- 2.5
@@ -901,7 +901,7 @@ Terminus 2      Terminal-Bench  62.9 +- 2.7
 Claude Code     Anthropic       58.0 +- 2.9
 ```
 
-Same model, 21.8-point spread -- a range the paper notes is "comparable to differences between model generations". The harness moved the score as much as swapping the model would have.
+Same model; the paper reports a 21.8-point spread (79.8 down to 58.0) -- a range it notes is "comparable to differences between model generations". [verified: live tbench.ai/leaderboard/terminal-bench/2.0 probed first-hand 2026-07-05] Eight of the nine rows match the live board exactly (Capy 75.3 through Claude Code 58.0); **ForgeCode/79.8 -- the top of the spread -- is NOT on the live board** (142 entries checked; also absent from the 2.1 board, which has since moved to Opus 4.7/4.8, not 4.6). So the paper's headline 79.8 top and 21.8-pt figure cannot be confirmed at the primary today: either ForgeCode was withdrawn since the paper's snapshot or mis-attributed in it. The **live-verifiable spread is 75.3 -> 58.0 = 17.3 points** on one fixed model. The thesis survives the correction intact and is in fact independently corroborated on the same site: the 2.1 board shows a Claude Opus 4.7 -> 4.8 generation gap of roughly 9-13 points -- *smaller* than the 17.3-point harness spread. The harness moved the score more than a model generation did.
 
 ### Fix: Treat Every Single-Number Model Claim as Under-Specified
 
@@ -913,7 +913,7 @@ Same model, 21.8-point spread -- a range the paper notes is "comparable to diffe
 
 - Primary source reached and extracted directly: arxiv.org/html/2606.17799 fetched, Table 1 parsed. The social corpus cited two inconsistent arXiv IDs (2606.10209 vs 2606.17799); both were probed and the wrong one eliminated -- the trust rule in action, resolve the ID before citing.
 - Position paper by a vendor whose commercial thesis is that current benchmarks are broken. The table data is TerminalBench leaderboard compilation, not the authors' own runs.
-- Leaderboard rows are per-org submissions; run configs (token budgets, retries, parallelism) are not normalized in the table. The spread is real on the leaderboard; its causal decomposition (pure harness design vs submission-config differences) is not established by the table alone. [hypothesis: the live leaderboard (tbench.ai) has not been probed first-hand -- the paper is one hop from the primary data; snapshot the relevant rows before citing the numbers anywhere load-bearing.]
+- Leaderboard rows are per-org submissions; run configs (token budgets, retries, parallelism) are not normalized. The spread is real on the live leaderboard; its causal decomposition (pure harness design vs submission-config differences) is not established by the numbers alone. [verified: tbench.ai 2.0 probed 2026-07-05 -- 8/9 rows confirmed, ForgeCode/79.8 top row absent from the live board, so cite the 17.3-pt live spread, not the paper's 21.8; the ForgeCode row is paper-only until the leaderboard shows it again.]
 - The paper's prose says "four agent harnesses" against its own 9-row table -- an editing artifact. Cite the table, not the prose.
 
 ### Pairing With Other Patterns
