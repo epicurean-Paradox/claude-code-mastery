@@ -13,6 +13,42 @@
 - Keep functions short. If it needs scrolling, split it.
 - Surgical changes only: do not refactor or clean up code outside current task scope.
 
+## AI-Slop Design Gate (web/UI work)
+
+Applies to ANY generated UI: sites, themes, landing pages, artifacts, dashboards. Distilled from
+the r/ClaudeAI thread "What are dead giveaways for AI slop websites?" (2.4k upvotes). These are
+banned **defaults** — an element used deliberately and on-brand is a choice; present because it's
+the model default, it is a defect to fix before shipping. Stakes: this aesthetic now reads
+"low-effort/scam" to users — it erodes brand trust, not just style.
+
+**Visual tells — never default to:**
+- Purple→blue gradients; purple-on-white theme; gradient hero text; "Transform your X" hero copy.
+- Bento grids; rounded corners on everything; box-within-box; every section a card grid; 3-card
+  rows with a thick left-only border; icon inside a translucent same-color rounded box.
+- Inter/Roboto/Arial/system-font defaults (and the now-slopified "safe alternates" Playfair,
+  Bricolage); no deliberate type scale; wide letter-spacing on titles/buttons.
+- Emoji as icons — renders inconsistently across platforms and reads low-effort; use a real icon pack.
+- Zero images (sections that are only icon-cards) — strong pages are image-heavy.
+- Glassmorphism; shadow-on-hover on everything; scattered hover animations; uniform ~700px
+  max-width; stock shadcn slate-gray cards + default blue accent + identical padding rhythm;
+  grey-on-dark-grey unreadable text; tiny text in oceans of whitespace; missing dark mode.
+
+**Copy tells — never default to:**
+- "No X. No Y. Just Z."; "Simple, transparent pricing"; em-dash saturation; "delve into" /
+  "it's worth noting" / "Furthermore" openers; uniform paragraph cadence where every section ends
+  confident; polished copy that reflects no real product decisions or constraints ("real products
+  have weird edges because real problems have weird edges").
+- Terminal periods on display headings/titles. Internal staccato periods in a heading are rhythm;
+  the end period is the tell. Body copy keeps normal punctuation.
+
+**Required practice:**
+1. Never freestyle from "modern landing page". Provide concrete reference sites/screenshots, a
+   named style direction (neo-brutalism, art deco, editorial, …), and explicit design tokens
+   (palette, type scale, spacing, radius) — from the project's brand SSOT where one exists.
+2. Real images over icon-card walls; a chosen icon pack; dark-mode support.
+3. Critique pass before shipping: the `frontend-design` skill (official Anthropic plugin — its
+   SKILL.md bans these same defaults) or a second-agent design critique against this list.
+
 ## Security Fundamentals
 
 - All secrets in `.env` — never hardcoded, never logged, never in CLI args.
