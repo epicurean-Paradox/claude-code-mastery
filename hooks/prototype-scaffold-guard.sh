@@ -8,7 +8,7 @@
 # This closes the loop the lesson described: the lesson was prose and got
 # re-violated (the "PAGE 0 OF 3" stepper reached production). Now it fails loud.
 #
-# Receives the tool-call JSON on stdin. Prints {"continue":false,...} to block.
+# Receives the tool-call JSON on stdin. Prints the PreToolUse DENY contract to block.
 set -euo pipefail
 
 INPUT=$(cat)
@@ -44,7 +44,10 @@ HITS=$(echo "$CONTENT" | grep -inE "$SCAFFOLD_RE" 2>/dev/null | head -5 || true)
 
 if [ -n "$HITS" ]; then
   REASON=$(printf 'Prototype scaffold blocked in frontend source (LESSONS Lesson 3: dev assets != product).\nFile: %s\nMatched dev-reference markers:\n%s\n\nThis scaffold (state-gallery stepper / reviewer nav hint / StageLabel banners) is a DEVELOPMENT asset and must not ship. Render from real state instead.\nIf this is genuinely product copy (not scaffold), rephrase, or write to the prototype corpus (docs/product-design), or disable this guard for the edit.' "$FILE" "$HITS")
-  jq -cn --arg r "$REASON" '{continue:false, stopReason:$r}'
+  # PreToolUse DENY contract: {"decision":"block",...} denies THIS tool call and
+  # returns the reason to the model. {"continue":false} halts the whole agent and
+  # does not reliably unwind a tool side effect (proven on ScheduleWakeup, 2026-07-05).
+  jq -cn --arg r "$REASON" '{decision:"block", reason:$r, hookSpecificOutput:{hookEventName:"PreToolUse", permissionDecision:"deny", permissionDecisionReason:$r}}'
   exit 0
 fi
 

@@ -196,9 +196,10 @@ jobs:
       - name: scaffold regex -- glyph nav-hint + stepper MUST block (Lesson 3)
         run: |
           OUT="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/x/frontend/src/components/Foo.tsx","content":"<span>← → to navigate</span>"}}' | bash hooks/prototype-scaffold-guard.sh)"
-          echo "$OUT" | grep -q '"continue":false' || { echo "::error::guard did not block the ← → nav-hint copy"; exit 1; }
+          echo "$OUT" | grep -q '"decision":"block"' || { echo "::error::guard did not block the ← → nav-hint copy"; exit 1; }
+          echo "$OUT" | grep -q '"permissionDecision":"deny"' || { echo "::error::guard block missing permissionDecision:deny (non-denying contract)"; exit 1; }
           OUT2="$(printf '{"tool_name":"Write","tool_input":{"file_path":"/x/frontend/src/components/Foo.tsx","content":"PAGE 0 OF 3"}}' | bash hooks/prototype-scaffold-guard.sh)"
-          echo "$OUT2" | grep -q '"continue":false' || { echo "::error::guard did not block the stepper eyebrow"; exit 1; }
+          echo "$OUT2" | grep -q '"decision":"block"' || { echo "::error::guard did not block the stepper eyebrow"; exit 1; }
           echo "scaffold copy blocked as expected"
 
       - name: scaffold regex -- write-time guard and detector MUST stay in sync
