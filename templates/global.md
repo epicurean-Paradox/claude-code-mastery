@@ -32,6 +32,15 @@ the model default, it is a defect to fix before shipping. Stakes: this aesthetic
 - Glassmorphism; shadow-on-hover on everything; scattered hover animations; uniform ~700px
   max-width; stock shadcn slate-gray cards + default blue accent + identical padding rhythm;
   grey-on-dark-grey unreadable text; tiny text in oceans of whitespace; missing dark mode.
+- **A decorative section eyebrow/kicker over every heading** (the impeccable.style "repeated section
+  kicker" tell) — keep eyebrows on a page's act-openers only, not one-per-section; but a STRUCTURAL
+  numbered ID (L0–L3, S0–S7, F0–F7) is navigation, keep it. Low-contrast micro-labels (~12px
+  secondary text on a panel near the 4.5:1 AA floor); image hover-zoom (`scale()` on an `<img>`);
+  animating layout properties (width/height/top/left) instead of transform/opacity.
+- Named copy+design taxonomies to audit against (not vibes): `impeccable.style/slop` and
+  `ignorance.ai/p/the-field-guide-to-ai-slop`. Run a design-critique pass (the `frontend-design`
+  skill or an instructed-subagent product-designer council) against them before shipping; grade each
+  hit deliberate-on-brand vs present-because-default.
 
 **Copy tells — never default to:**
 - "No X. No Y. Just Z."; "Simple, transparent pricing"; em-dash saturation; "delve into" /
