@@ -32,6 +32,15 @@ the model default, it is a defect to fix before shipping. Stakes: this aesthetic
 - Glassmorphism; shadow-on-hover on everything; scattered hover animations; uniform ~700px
   max-width; stock shadcn slate-gray cards + default blue accent + identical padding rhythm;
   grey-on-dark-grey unreadable text; tiny text in oceans of whitespace; missing dark mode.
+- **A decorative section eyebrow/kicker over every heading** (the impeccable.style "repeated section
+  kicker" tell) — keep eyebrows on a page's act-openers only, not one-per-section; but a STRUCTURAL
+  numbered ID (L0–L3, S0–S7, F0–F7) is navigation, keep it. Low-contrast micro-labels (~12px
+  secondary text on a panel near the 4.5:1 AA floor); image hover-zoom (`scale()` on an `<img>`);
+  animating layout properties (width/height/top/left) instead of transform/opacity.
+- Named copy+design taxonomies to audit against (not vibes): `impeccable.style/slop` and
+  `ignorance.ai/p/the-field-guide-to-ai-slop`. Run a design-critique pass (the `frontend-design`
+  skill or an instructed-subagent product-designer council) against them before shipping; grade each
+  hit deliberate-on-brand vs present-because-default.
 
 **Copy tells — never default to:**
 - "No X. No Y. Just Z."; "Simple, transparent pricing"; em-dash saturation; "delve into" /
@@ -40,6 +49,17 @@ the model default, it is a defect to fix before shipping. Stakes: this aesthetic
   have weird edges because real problems have weird edges").
 - Terminal periods on display headings/titles. Internal staccato periods in a heading are rhythm;
   the end period is the tell. Body copy keeps normal punctuation.
+- **Manufactured-contrast aphorisms / short rebuttals** (refs `impeccable.style/slop` +
+  `ignorance.ai/p/the-field-guide-to-ai-slop`): the reflexive "X, not Y" / "Not X. Y." /
+  "It is not a checklist. It is an architecture:" flip-fragment, used as a card title or heading, is
+  the single loudest copy tell. Also the **"N things. One thing" snappy triad** ("Four commitments.
+  One core", "Five checks. Pass all five") and the **tacked-on nominalization flourish** ("…made
+  architectural.", "…Auditably."). Fix: state plainly what the thing IS or DOES; a heading carries
+  information scent, not a slogan. A genuine in-sentence contrast where the distinction is the actual
+  content ("responsibility follows power, not contract") is defensible; a standalone two-beat
+  fragment is not. Other guide tells: em-dash cadence, snappy triads ("fast, efficient, reliable"),
+  unearned profundity ("Something shifted"), vapid openers ("In today's … world"), buzzwords
+  (streamline/empower/supercharge/unlock/world-class), academic filler (delve/unpack/multifaceted).
 
 **Required practice:**
 1. Never freestyle from "modern landing page". Provide concrete reference sites/screenshots, a
