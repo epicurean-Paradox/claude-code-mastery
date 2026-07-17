@@ -689,3 +689,57 @@ The evidence-tagging gate from Lesson 2 extends to derived layers: any claim res
 ### Generalisable pattern
 
 Summaries drift stronger than their sources because compression deletes hedges, and hedges are content. The derived layer -- action items, TL;DR, plan status rows, handoff blocks -- is what future readers and future sessions actually consume, so a strength upgrade there silently rewrites the evidence record even when the body underneath is impeccable. Every restatement of a finding must preserve its epistemic strength verbatim; "hard evidence" is a label only a read primary source can earn. The trust rules that police external sources must also police the layers of your own artifact, and body-vs-summary consistency is its own gate -- checked mechanically, not hoped for (Lesson 17).
+
+## Lesson 25 -- Machine translation flattens the markup it can't see; ship both languages in the DOM
+
+### What happened
+
+A bilingual marketing/technical site (netpositive.management) served its Spanish via the Google Translate widget (googtrans cookie), English as source. The copy was dense with inline markup -- italic-serif spans, an `npm` wordmark lockup, stencil "stamp" words, and citations whose Harvard reference lived in a hover-card inside the link. GT translated the rendered text runs and mangled every markup boundary: it glued words across the inline spans ("cómodomentiren" from "comfortable lie", "npmSe basa"), pulled the hidden citation-card text inline mid-sentence ("al Net Positive.[full Polman & Winston reference]Estrella Polar"), left strings untranslated inconsistently ("Wanna know more?"), mixed tú and usted across the same site, and appended terminal periods to headings. All of it shipped to production.
+
+### What was wrong with the response
+
+Machine translation operates on visible text runs, not on the DOM structure underneath them, so any surface with rich inline markup (citations, emphasis spans, brand lockups) hands it broken token boundaries and hidden text it will happily inline. Trusting it for a second language on a site that is anything more than plain prose ships those artifacts by construction -- the tool cannot respect a structure it never sees. "It renders" was mistaken for "it reads": nobody had actually read the machine output in the target language before it went live.
+
+### What changed in the system
+
+Replaced GT with hand-authored Spanish as paired elements: every translatable node ships both languages, `<span lang="en">…</span><span lang="es">…</span>`, and CSS shows the active one (`html[lang="es"] [lang="en"] { display:none }` + inverse). A tiny `<head>` script sets `<html lang>` before first paint (no flash); the toggle flips it with no reload -- CSS does the swap. Load-bearing gotchas, now standing rules: edit ENGLISH-first then re-translate (source is the source of truth); segment prose AROUND a shared citation anchor rather than duplicating it (two copies = duplicate `id` = invalid HTML); and when a card's face copy changes, update its JSON-island modal title too, because the modal mirrors the face. Verify with render symmetry -- in one language, zero elements of the other are visible.
+
+### Generalisable pattern
+
+A machine translator is a text-run transform with no model of your markup, so it corrupts exactly the structure that makes a page more than prose: citations, inline emphasis, brand marks. For any bilingual surface with that structure, author both languages into the DOM and let CSS choose -- MT is acceptable only for plain prose with no inline markup. And the L11 discipline applies to language: "the translation rendered" is not "the translation reads"; a human (or a native-competent pass) reads the target-language output before it ships.
+
+## Lesson 26 -- The manufactured-contrast aphorism is the loudest slop tell; state the plain thing
+
+### What happened
+
+The operator flagged a site's copy as "AI slop jargon" and pointed at two published slop taxonomies (impeccable.style/slop, the ignorance.ai field guide). The voice turned out to be built almost entirely on reflexive constructions: manufactured-contrast card titles and short rebuttals ("Criterion, not metric", "Not aspirations. Checks.", "Discovered, not deduced"), "N things. One thing" snappy-triad headings ("Four commitments. One core", "Five checks. Pass all five"), and tacked-on nominalization flourishes ("…made architectural.", "…Auditably."). A parallel design audit against the same taxonomy's ~35 VISUAL tells found the front-end already clean -- the standing AI-Slop Design Gate had caught the gradients, glassmorphism, bento grids, default webfonts and emoji years earlier -- leaving one residual design tell: a decorative section eyebrow over nearly every heading.
+
+### What was wrong with the response
+
+These constructions feel like voice but are the reflexive default of generated prose; as titles and headings they carry no information scent -- "Criterion, not metric" tells a reader nothing the plain "How a criterion differs from a metric" doesn't. The same reflex on the design side is a kicker over every section. The trap is treating the aesthetic as a style to defend rather than a default to remove. It also requires a named checklist to see: without impeccable.style/ignorance.ai in hand, the author who wrote the slop cannot reliably spot it (Lesson 16 shape -- you can't grade your own reflexes without an external rubric).
+
+### What changed in the system
+
+The AI-Slop gate's "Copy tells" now names the manufactured-contrast / "N. One" / nominalization family explicitly, with the two source URLs. De-slop rule: state plainly what the thing IS or DOES; a heading carries information scent, not a slogan. A genuine in-sentence contrast where the distinction is the actual content ("responsibility follows power, not contract") is defensible; a standalone two-beat fragment is not. On design: a section eyebrow belongs on act-openers, not one per heading; but STRUCTURAL numbered IDs (L0–L3, S0–S7, F0–F7) are navigation, not decoration -- keep them, do not confuse structural repetition with decorative repetition. Both copy and design are audited against the named taxonomy before shipping, and a deliberate on-brand choice is distinguished from a present-because-default tell.
+
+### Generalisable pattern
+
+Slop is a set of reflexive DEFAULTS, not a style, and the fix is always "say the plain thing." You cannot spot your own defaults reliably without an external rubric, so audit copy AND design against a named checklist (impeccable.style/slop, ignorance.ai) rather than vibes -- and grade each hit as deliberate-and-on-brand vs present-because-default. The hardest discrimination is repetition: a numbered framework spine repeated across pages is information; a decorative kicker repeated over every heading is the tell. Same surface feature, opposite verdicts, decided by whether it carries meaning.
+
+## Lesson 27 -- An operator-named unvetted skill runs as an instructed-subagent council; subjective edits on a live surface are shown before they ship
+
+### What happened
+
+Across one session the operator asked to use several community skills by name (`/product-designer`, `/web-scraper`, proofreading skills) that had not passed the Skill Security Gate's audit. The same session applied ~44 subjective copy rewrites and a batch of design changes to a LIVE public site. Neither the unvetted skills were invoked directly, nor were the changes mass-applied unseen: the audits/rewrites ran as instructed-subagent councils (three Opus lenses each, grounded in the reference checklist), and the synthesized before→after was presented for sign-off before anything was applied.
+
+### What was wrong with the response (avoided)
+
+Invoking an unvetted community skill because the operator named it would bypass the security gate the instant the skill executes -- the same shape as the agent-installer auto-REJECT (Lesson 21): the request does not change what runs. And mass-applying 40+ subjective wording changes to production without review would spend the operator's review budget on rejected wording and ship taste decisions the operator never saw. "The operator approved the direction" is not "the operator approved this wording."
+
+### What changed in the system
+
+Two standing patterns. (1) When an operator names an unaudited skill, deliver the capability through a channel the gate already trusts: either run the skills.sh 3-audit first, or reproduce the discipline as an instructed subagent lens (the gate governs what executes, not who asked). Built-in tools (WebFetch as inert data) replace a scraper skill; instructed Opus lenses replace a proofreader/designer skill. (2) The MOCK-BOTH discipline extends to any subjective copy/design edit on a live surface: synthesize → present before→after → sign-off → apply → verify live. Anything a human's taste owns gets shown as a diff before it ships.
+
+### Generalisable pattern
+
+The security gate is not overridden by an explicit request, because the request is not the threat -- the execution is (Lesson 21); route the intent through a trusted channel instead of the gated one. And approval has a grain: direction-level approval does not license wording-level changes, so for anything decided by taste rather than correctness, show the diff and take the sign-off. Councils are how you deliver a named-but-unvetted skill safely; before→after is how you deliver a subjective change to a surface real users read.
