@@ -40,6 +40,17 @@ the model default, it is a defect to fix before shipping. Stakes: this aesthetic
   have weird edges because real problems have weird edges").
 - Terminal periods on display headings/titles. Internal staccato periods in a heading are rhythm;
   the end period is the tell. Body copy keeps normal punctuation.
+- **Manufactured-contrast aphorisms / short rebuttals** (refs `impeccable.style/slop` +
+  `ignorance.ai/p/the-field-guide-to-ai-slop`): the reflexive "X, not Y" / "Not X. Y." /
+  "It is not a checklist. It is an architecture:" flip-fragment, used as a card title or heading, is
+  the single loudest copy tell. Also the **"N things. One thing" snappy triad** ("Four commitments.
+  One core", "Five checks. Pass all five") and the **tacked-on nominalization flourish** ("…made
+  architectural.", "…Auditably."). Fix: state plainly what the thing IS or DOES; a heading carries
+  information scent, not a slogan. A genuine in-sentence contrast where the distinction is the actual
+  content ("responsibility follows power, not contract") is defensible; a standalone two-beat
+  fragment is not. Other guide tells: em-dash cadence, snappy triads ("fast, efficient, reliable"),
+  unearned profundity ("Something shifted"), vapid openers ("In today's … world"), buzzwords
+  (streamline/empower/supercharge/unlock/world-class), academic filler (delve/unpack/multifaceted).
 
 **Required practice:**
 1. Never freestyle from "modern landing page". Provide concrete reference sites/screenshots, a
