@@ -57,13 +57,21 @@ Bedrock — no `api.anthropic.com`, no OpenAI/Grok/Perplexity/Gemini direct call
   cross-region inference profile, matching the existing 242 setup — memory
   `reference_bedrock_chat_config`).
 - **Embeddings**: **Bedrock** (Titan/Cohere), replacing both local Ollama and the remote
-  OpenAI backend. The index is L2 derived data, never a source of truth; a retrieval hit
-  must resolve to a real note path or be dropped (fail-closed).
-- **Enrichment scope = curated + scholarly only** (operator ruling): Bedrock **Knowledge
-  Bases** retrieval over ingested sources + keyless public data fetches (arXiv, Crossref,
-  OpenAlex, Semantic Scholar, Wikipedia) treated as **inert-data** WebFetch. **No live web
-  search** (Grok/Perplexity/Tavily/Brave — stripped) and **no media transcription**
-  (Whisper/podcast/YouTube — stripped).
+  OpenAI backend. Vectors are stored in **pgvector on the existing Throughline RDS**
+  (operator ruling 2026-09-02) — **no OpenSearch Serverless / Bedrock Knowledge Bases
+  standing cost**. The index is L2 derived data, never a source of truth; a retrieval hit
+  is a SQL similarity query that must resolve to a real note path or be dropped
+  (fail-closed).
+- **Enrichment scope = curated + scholarly only** (operator ruling): retrieval over
+  ingested sources via the **pgvector index** (Bedrock embeddings + SQL similarity — NOT
+  Bedrock Knowledge Bases, to avoid the OpenSearch floor) + keyless public data fetches
+  (arXiv, Crossref, OpenAlex, Semantic Scholar, Wikipedia) treated as **inert-data**
+  WebFetch. **No live web search** (Grok/Perplexity/Tavily/Brave — stripped) and **no media
+  transcription** (Whisper/podcast/YouTube — stripped).
+- **Model tiering (cost control):** generation/synthesis → Claude **Sonnet** via Bedrock;
+  the three LLM-based OWASP guard checks (§5) → **Haiku** (classifier tier, ~10× cheaper);
+  human-gated L2→L0 promotion review may use Opus rarely. Per the Subagent-Model-Routing
+  rule (route by ambiguity: bottom tier for classification).
 
 ### 3. Fork hardening (before it may ever run)
 
@@ -168,6 +176,12 @@ same egress pin (§2), and its own prompts are covered by the LLM01/LLM08 contro
 (fence-diff + OS backstop); single cloud (Bedrock) = one IAM/egress surface matching
 existing infra; provenance makes every derived note traceable + regenerable; the whole
 thing reuses the bok fail-closed stamp/sync machinery.
+
+**Cost profile (AWS, list-price estimate — verify current Bedrock pricing):** usage-driven,
+**no standing floor** (pgvector reuses existing RDS; no OpenSearch/KB). Generation dominates
+at ~$0.60/bg-agent run (Sonnet); Haiku guard checks add ~$0.03/run; embeddings negligible.
+Monthly ≈ **$20–30 light / $200–300 moderate / $1,000–1,500 heavy** (per-compaction across
+many sessions). The Loop Launch Gate budget cap (§5 LLM06) bounds the heavy tail.
 
 **Negative / accepted:** a recurring **fork re-audit tax** (each upstream pull re-checks for
 reintroduced installer/egress/pollers — heavier than Graft because these are near
