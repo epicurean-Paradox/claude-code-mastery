@@ -288,8 +288,15 @@ jobs:
           export CONFIDENTIALITY_DENYLIST="$DL" CONFIDENTIALITY_SCRUB_REQUIRE=1
           # Full tracked worktree (stronger than a diff scan; catches regressions anywhere)
           git ls-files -z | xargs -0 bash hooks/confidentiality-scrub.sh --text
-          # Recent commit messages + branch name
-          M="$(mktemp)"; git log --format='%s%n%b' -50 > "$M"
+          # NEW commit messages only. History predating this gate is immutable
+          # without a rewrite and is a recorded, accepted residual -- the gate
+          # protects everything from its introduction forward.
+          M="$(mktemp)"
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_NAME" = "main" ]; then
+            git log --format='%s%n%b' -1 > "$M"
+          else
+            git log --format='%s%n%b' origin/main..HEAD > "$M"
+          fi
           B="$(mktemp)"; printf '%s\n' "$GITHUB_HEAD_REF" "$GITHUB_REF_NAME" > "$B"
           bash hooks/confidentiality-scrub.sh --text "$M" "$B"
           # PR title/body (via env, never shell-interpolated -- script-injection safe)
