@@ -1,0 +1,151 @@
+# ADR 0001 — Layered knowledge base on a hardened second-brain fork
+
+**Status:** PROPOSED (awaiting operator sign-off on the schema)
+**Date:** 2026-09-02
+**Deciders:** operator + 4-lens data-science council (data-layer architecture, second-brain reconnaissance, drift/correctness/ML, governance/gate)
+**Supersedes:** the interim "hand-authored vault only" posture recorded in `~/work/_graph/Graft-Fork.md`
+
+## Context
+
+The workspace needs a navigable knowledge base where AI can enrich and cross-link
+content **without ever corrupting hand-authored precedent**. Two candidate tools
+were assessed:
+
+- **Graft** (`NanoNets/context-graph-engine`) parses **code only** (tree-sitter; no
+  markdown grammar). It cannot graph a prose/lessons corpus — wrong vehicle for the
+  knowledge layer. Kept as a gated, source-built **code**-navigation tool only
+  (see `Graft-Fork.md`); out of scope here.
+- **obsidian-second-brain** (`eugeniughelbur/obsidian-second-brain`) is a Claude Code
+  skill that ingests sources and rewrites an Obsidian vault. Its value (auto-synthesis,
+  cross-linking, embeddings) is wanted; its delivery (a `curl|bash` installer that writes
+  `~/.claude/settings.json`, an unattended Telegram poller, direct multi-vendor API
+  egress) violates this project's gates (Skill Security Gate / L21 auto-REJECT; Loop
+  Launch Gate; no-direct-vendor-API posture).
+
+**Decision driver:** keep the capability, contain the delivery — by *architecture*
+(a data-layer boundary the tool physically cannot cross) plus a *hardened fork*
+(the L27 remedy: reproduce a wanted capability through a trusted channel).
+
+## Decision
+
+### 1. Three-tier data hierarchy (writes only ever flow down)
+
+| Tier | Contents | Sole writer | Fork's access |
+|---|---|---|---|
+| **L0 — immutable SSOT** | Hand-authored precedent: LESSONS/LEDGER, bok `decisions/instruments/hubs/frameworks/exceptions`, all `_graph/` notes, second-brain `raw/`. | **Human only** | **read-only** (prose) |
+| **L1 — deterministic-derived** | Mechanically regenerated from a named SSOT by a **no-LLM** transform (bok `_state/`). Reproducible byte-for-byte modulo `generated-at`. | **`sync.py` only** (whole-file overwrite) | read-only |
+| **L2 — AI-synthesized** | The fork's product: summaries, extracted patterns, embedding index, cross-link/backlink maps, contradiction flags. Second-brain `wiki/`. | **fork only** | read-write, **only here** |
+
+**Invariant — prose flows down, links CRUD across all tiers (operator ruling 2026-09-02):**
+- *Prose*: human→L0, `sync.py`→L1, fork→L2. Nothing writes another tier's prose.
+- *Links*: the fork MAY create/update/delete wikilinks/backlinks **across all tiers**,
+  but **only inside a delimited machine-owned block** (`<!-- L2:links start -->` …
+  `<!-- L2:links end -->`) appended to a note. A tier's authored prose above the fence
+  is never touched.
+
+This is the operator's revision of the council's "L0 byte-frozen" default: the containment
+guarantee is downgraded from *"the fork cannot alter a byte of SSOT"* to *"the fork alters
+SSOT only inside the link fence."* The residual risk (a malformed write eating prose above
+the fence) is mitigated by the fence-diff guard in §3.
+
+### 2. LLM + embeddings + enrichment — AWS Bedrock only (no direct vendor API)
+
+Operator ruling 2026-09-02: **all** model and embedding provisioning routes through AWS
+Bedrock — no `api.anthropic.com`, no OpenAI/Grok/Perplexity/Gemini direct calls.
+
+- **LLM** (summarize / synthesize / reconcile): Claude via **Bedrock** (short model ids +
+  cross-region inference profile, matching the existing 242 setup — memory
+  `reference_bedrock_chat_config`).
+- **Embeddings**: **Bedrock** (Titan/Cohere), replacing both local Ollama and the remote
+  OpenAI backend. The index is L2 derived data, never a source of truth; a retrieval hit
+  must resolve to a real note path or be dropped (fail-closed).
+- **Enrichment scope = curated + scholarly only** (operator ruling): Bedrock **Knowledge
+  Bases** retrieval over ingested sources + keyless public data fetches (arXiv, Crossref,
+  OpenAlex, Semantic Scholar, Wikipedia) treated as **inert-data** WebFetch. **No live web
+  search** (Grok/Perplexity/Tavily/Brave — stripped) and **no media transcription**
+  (Whisper/podcast/YouTube — stripped).
+
+### 3. Fork hardening (before it may ever run)
+
+Modeled on the Graft `gate-hardening` precedent (`FORK_HARDENING.md`: no-op the offending
+path, keep the signature, pin a red-first test as a merge gate).
+
+**Strip (delete, not disable — a disabled path is one env-var from live):**
+- Installer + config writers: `quick-install.sh`, `install.sh`, `setup.sh`,
+  `setup_settings_hook.py`, `update.sh`. Replace with a manual, reviewed, source-built
+  install (`--ignore-scripts`) that never writes `~/.claude/settings.json`.
+- Unattended pollers: the `integrations/telegram-journal/` launchd daemon.
+- Direct third-party egress: the `scripts/research/` web-search + LLM providers (Grok,
+  Perplexity, Gemini, Tavily, Brave) and the `scripts/research/` media pipeline
+  (yt-dlp/ffmpeg/Whisper). The **enrichment function is rebuilt on Bedrock KB** (§2), not
+  deleted; the direct-API implementation is what's removed.
+- Remote embed backend (`OBSIDIAN_EMBED_BACKEND=openai`) → Bedrock embeddings.
+
+**Keep, scoped:**
+- The PostCompact **bg-agent** (`obsidian-bg-agent.sh`, headless autonomous writer) —
+  operator-retained. Its writes are pinned to the L2 root; any L0 link-block write passes
+  the fence-diff guard (below). Its model calls route to Bedrock.
+- The mutation scripts (`merge_notes.py`, `heal_links.py`, `triage_links.py`, …) — the
+  link/vault CRUD — write only L2 + link fences.
+
+**Enforce (fail-closed, defense-in-depth):**
+1. **Write-root confinement**: one required `DERIVED_VAULT_ROOT`; unset → hard error (no
+   cwd/`~` fallback). Every write routes through one guard that `realpath`-resolves the
+   target and asserts it is inside L2 **or** inside a valid link fence in any tier.
+2. **Fence-diff guard**: a machine write to an L0/L1 note must change bytes **only between
+   the fence markers**; the guard diffs the file and rejects any change to prose outside
+   the fence. This is the containment for the operator's link-CRUD model.
+3. **OS backstop**: run the fork as a principal with **no write bit on the SSOT repos**
+   except through the reviewed link-block path (the load-bearing control — survives a guard
+   bug).
+4. **`layer:` linter** (pre-commit + required CI): every note carries `layer: L0|L1|L2`;
+   a tool-authored commit touching an `L0`/`L1` note outside its fence, or any note missing
+   `layer:`, FAILS. A linter that parsed zero notes FAILS.
+5. **Egress test** (CI, red-first): grep for any non-Bedrock model/host (`api.anthropic.com`,
+   `api.x.ai`, `api.perplexity.ai`, `googleapis`, OpenAI, Ollama) → must be zero.
+
+### 4. Provenance + drift control on L2 (reuses the bok stamp triad)
+
+Every L2 note carries mandatory frontmatter; the producer refuses to emit one missing any
+field (schema gate, fail-closed):
+
+```yaml
+layer: L2
+type: synthesis | pattern | crosslink | contradiction | embedding-index
+source-refs: [ "LESSONS.md#lesson-16", "decisions/D-0017.md" ]   # required, non-empty
+source-hashes: { "decisions/D-0017.md": "sha256:…" }             # SSOT hash at generation
+generated-by: second-brain-fork@<commit>
+generated-at: 2026-09-02T13:00:00Z
+model: bedrock/<model-id> | bedrock-embed/<id>
+confidence: high | med | low          # driven by source-resolution, not model self-report
+unverified: true                       # never absent on an L2 note
+updated: 2026-09-02
+source-verified: 2026-09-02            # last time source-refs confirmed present + hash-matched
+stale-after: 30                        # days (contradiction flags: 7)
+review-status: unreviewed | promoted
+```
+
+- **Drift = content-hash, not just time**: on each sync, hash the current SSOT source vs
+  the stored `source-hashes`; mismatch ⇒ the L2 note is stale by construction, auto-quarantined
+  (dropped from graph + retrieval), never silently rewritten.
+- **Promotion L2→L0 is a human event only** — a person copies content into an L0 note,
+  strips `layer`/`unverified`, stamps `source-verified`. No machine process creates or edits
+  an `L0` note's prose.
+- **L24 guard**: an L2 claim stronger than its cited source is a drift finding, not a paraphrase.
+
+## Consequences
+
+**Positive:** enrichment/synthesis capability retained; SSOT prose provably immutable
+(fence-diff + OS backstop); single cloud (Bedrock) = one IAM/egress surface matching
+existing infra; provenance makes every derived note traceable + regenerable; the whole
+thing reuses the bok fail-closed stamp/sync machinery.
+
+**Negative / accepted:** a recurring **fork re-audit tax** (each upstream pull re-checks for
+reintroduced installer/egress/pollers — heavier than Graft because these are near
+second-brain's core); **pin-and-rarely-upgrade** required; the kept bg-agent + link-CRUD
+into L0 fences is a real (bounded) mutation surface, not zero; no live web search or media
+transcription.
+
+**Open sign-off items (schema is taste-grained per L27):** the `layer:`/provenance
+frontmatter field names; the fence-marker syntax; the `DERIVED_VAULT_ROOT` layout; whether
+the bg-agent may write link-fences into L0 at all or only into L2 (the residual-risk knob).
