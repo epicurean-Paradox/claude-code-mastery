@@ -38,8 +38,8 @@ PROJECTS="$HOME/.claude/projects"
 if [ -d "$PROJECTS" ]; then
   # Scope the SessionStart digest to the CURRENT project's transcripts.
   # A global newest-2 scan surfaces OTHER projects' claims as if they were
-  # this project's (observed: a Telos-ONG transcript flagged inside an
-  # npm-dashboard session; the misattribution then propagated into a
+  # this project's (observed: one project's transcript flagged inside
+  # another project's session; the misattribution then propagated into a
   # cross-project note). Transcript dirs are the session cwd with every
   # non-alphanumeric mapped to '-'; fall back to the global scan only if
   # that mapping misses.

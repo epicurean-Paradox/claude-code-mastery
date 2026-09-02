@@ -56,7 +56,7 @@ After logging in via Cognito Hosted UI + Google IdP, users on a production deplo
 - QuillBot
 - "Console Events Recorder"
 
-A request to `https://localhost:3000/` appeared in the HAR with `Referer: https://throughline-dev.datamaran.com/`. The extension theory matched: 1Password probes local apps, the localhost fetch sits adjacent to extension script fetches, the user already had local Grafana running on port 3000.
+A request to `https://localhost:3000/` appeared in the HAR with `Referer: https://<the-employer-dev-host>/`. The extension theory matched: 1Password probes local apps, the localhost fetch sits adjacent to extension script fetches, the user already had local Grafana running on port 3000.
 
 The assistant pinned the bug on the extensions and recommended toggling them off.
 
