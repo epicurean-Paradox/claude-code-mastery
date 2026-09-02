@@ -231,3 +231,19 @@ jobs:
             exit 1
           fi
           echo "0 SOFT rows -- every lesson is gated"
+
+      - name: Lesson-graph lint -- every lesson has a live ledger gate (L17)
+        run: |
+          python3 -m py_compile hooks/lesson-ledger-lint.py
+          python3 hooks/lesson-ledger-lint.py
+
+      - name: Lesson-graph lint -- self-test MUST fail on a dangling gate
+        run: |
+          cp LEDGER.md /tmp/LEDGER.bak
+          sed -i 's#`hooks/loop-cap-guard.sh`#`hooks/does-not-exist.sh`#' LEDGER.md
+          if python3 hooks/lesson-ledger-lint.py; then
+            cp /tmp/LEDGER.bak LEDGER.md
+            echo "::error::linter did NOT fail on a dangling gate reference"; exit 1
+          fi
+          cp /tmp/LEDGER.bak LEDGER.md
+          echo "dangling-gate correctly flagged"
