@@ -18,6 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Syntax + shellcheck
         run: |
@@ -247,3 +249,50 @@ jobs:
           fi
           cp /tmp/LEDGER.bak LEDGER.md
           echo "dangling-gate correctly flagged"
+
+      - name: confidentiality-scrub -- syntax + shellcheck
+        run: |
+          bash -n hooks/confidentiality-scrub.sh
+          shellcheck -S error hooks/confidentiality-scrub.sh
+
+      - name: confidentiality-scrub -- self-test (poisoned MUST fail, clean MUST pass)
+        run: |
+          T="$(mktemp -d)"
+          printf 'CANARYTERM123\n' > "$T/deny.txt"
+          printf 'has CANARYTERM123 inside\n' > "$T/poisoned.txt"
+          printf 'entirely clean\n' > "$T/clean.txt"
+          if CONFIDENTIALITY_DENYLIST="$T/deny.txt" bash hooks/confidentiality-scrub.sh --text "$T/poisoned.txt"; then
+            echo "::error::scrub did NOT fail on a poisoned file"; exit 1
+          fi
+          CONFIDENTIALITY_DENYLIST="$T/deny.txt" bash hooks/confidentiality-scrub.sh --text "$T/clean.txt"
+          if CONFIDENTIALITY_DENYLIST="$T/absent.txt" CONFIDENTIALITY_SCRUB_REQUIRE=1 bash hooks/confidentiality-scrub.sh --text "$T/clean.txt"; then
+            echo "::error::scrub did NOT fail-closed on a required-but-missing denylist"; exit 1
+          fi
+          echo "scrub self-test passed"
+
+      - name: confidentiality-scrub -- enforce on this repository (denylist from secret)
+        if: github.repository_owner == 'epicurean-Paradox'
+        env:
+          SCRUB_TERMS: ${{ secrets.SCRUB_TERMS }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Fail-closed on the owner's repo: the secret must exist and be non-empty.
+          DL="$(mktemp)"; printf '%s\n' "$SCRUB_TERMS" > "$DL"
+          export CONFIDENTIALITY_DENYLIST="$DL" CONFIDENTIALITY_SCRUB_REQUIRE=1
+          # Full tracked worktree (stronger than a diff scan; catches regressions anywhere)
+          git ls-files -z | xargs -0 bash hooks/confidentiality-scrub.sh --text
+          # Recent commit messages + branch name
+          M="$(mktemp)"; git log --format='%s%n%b' -50 > "$M"
+          B="$(mktemp)"; printf '%s\n' "$GITHUB_HEAD_REF" "$GITHUB_REF_NAME" > "$B"
+          bash hooks/confidentiality-scrub.sh --text "$M" "$B"
+          # PR title/body (via env, never shell-interpolated -- script-injection safe)
+          P="$(mktemp)"; printf '%s\n%s\n' "$PR_TITLE" "$PR_BODY" > "$P"
+          bash hooks/confidentiality-scrub.sh --text "$P"
+
+      - name: vertical-knowledge-graph -- validator tests + example validates
+        run: |
+          python3 -m pip install --user --quiet pyyaml
+          python3 -m py_compile patterns/vertical-knowledge-graph/validate_regions.py
+          python3 -m unittest discover -s patterns/vertical-knowledge-graph -p 'test_*.py' -v
+          python3 patterns/vertical-knowledge-graph/validate_regions.py patterns/vertical-knowledge-graph/examples/acme.regions.yaml
