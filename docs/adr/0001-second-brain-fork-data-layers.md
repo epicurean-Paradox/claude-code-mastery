@@ -1,6 +1,6 @@
 # ADR 0001 — Layered knowledge base on a hardened second-brain fork
 
-**Status:** PROPOSED (awaiting operator sign-off on the schema)
+**Status:** ACCEPTED (operator sign-off 2026-09-02; bg-agent L0 writes CONDITIONED on the §5 OWASP pipeline)
 **Date:** 2026-09-02
 **Deciders:** operator + 4-lens data-science council (data-layer architecture, second-brain reconnaissance, drift/correctness/ML, governance/gate)
 **Supersedes:** the interim "hand-authored vault only" posture recorded in `~/work/_graph/Graft-Fork.md`
@@ -132,6 +132,35 @@ review-status: unreviewed | promoted
   strips `layer`/`unverified`, stamps `source-verified`. No machine process creates or edits
   an `L0` note's prose.
 - **L24 guard**: an L2 claim stronger than its cited source is a drift finding, not a paraphrase.
+
+### 5. OWASP GenAI LLM Top-10 (2026 v1.0) processing pipeline — MANDATORY gate on autonomous L0 writes
+
+Operator ruling 2026-09-02: the autonomous bg-agent MAY write L0 link-fences, but **only
+if every autonomous write first passes a processing pipeline covering the OWASP Top 10 for
+LLM Applications 2026** (source: `OWASP-GenAI-LLM-Top-10-2026-v1.0.pdf`, dated 2026-08-04).
+The pipeline is a **fail-closed pre-write gate**: bg-agent generates → pipeline runs all ten
+checks → the write commits (to L2, or an L0/L1 link-fence) only on a clean pass; any check
+failing quarantines the candidate write to L2 `_review/` for a human and never touches L0.
+The gate is heaviest on L0-targeted writes (the SSOT-mutation path); L2-only writes run the
+same checks but a failure just quarantines within L2.
+
+| # (2026) | Risk | Control in the bg-agent → L0 pipeline |
+|---|---|---|
+| LLM01 | Prompt Injection (incl. cross-modal) | Ingested content (raw/, compaction summaries, any image/audio in scope) is INERT data: instruction-shaped spans are neutralized, never executed; the generator prompt hard-separates data from instructions; cross-modal inputs are excluded unless a scanner clears them. |
+| LLM02 | Sensitive Information Disclosure | Secret/PII scan (reuse `secret-scanner.sh` patterns) on every generated fence/note before write; an L2 note or link-fence carrying a credential/PII pattern is blocked. SSOT secrets never propagate into derived text. |
+| LLM03 | Excessive Agency | The bg-agent's authority is minimized: tool surface capped to Read/Write/Edit (no Bash/network), write-root confined to L2 + valid link-fences, fence-diff guard on any L0 write, promotion L2→L0 human-only. The autonomy itself is the risk this row contains. |
+| LLM04 | Supply Chain | Fork is source-built (`--ignore-scripts`), pinned commit, dep-audited; the strip tests are required merge gates (per §3). No packaged/installer path. |
+| LLM05 | Data & Model Poisoning | No fine-tuning (Bedrock base models only); source provenance via `source-hashes`; a source whose hash changed quarantines its derivations (drift, §4). |
+| LLM06 | Unbounded Consumption | Loop Launch Gate on the bg-agent: hard iteration cap, token/$ budget cap, and an escalation path declared before it runs; per-run write count bounded. |
+| LLM07 | Misinformation | Provenance + confidence + `unverified:` on every L2 note; regenerate-and-diff; the L24 strength-escalation check flags a claim stronger than its source. Low source-resolution ⇒ auto-quarantine. |
+| LLM08 | Hidden Context Exposure | Context isolation: generated notes/fences never embed system prompt, hidden instructions, or out-of-scope SSOT context; output scanned for leaked context markers before write. |
+| LLM09 | Vector & Embedding Weaknesses | The Bedrock embedding index is derived/regenerable, access-scoped; retrieval hits must resolve to a real note path (fail-closed); sensitive folders excluded from embedding to prevent inversion exposure of SSOT. |
+| LLM10 | Improper Output Handling | Generated markdown is sanitized before commit: no injected HTML/script, well-formed frontmatter, fence-marker integrity; the `layer:` linter + fence-diff guard validate the write. This is the last gate before bytes land in a note. |
+
+Each row ships with a red-first test (a poisoned candidate that MUST be blocked + a clean one
+that MUST pass), wired into CI as a merge gate — the enforcement without which this ADR is
+prose (L17). The pipeline is itself an LLM-processing surface, so it runs on Bedrock under the
+same egress pin (§2), and its own prompts are covered by the LLM01/LLM08 controls.
 
 ## Consequences
 
