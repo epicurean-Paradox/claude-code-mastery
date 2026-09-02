@@ -271,7 +271,13 @@ jobs:
           echo "scrub self-test passed"
 
       - name: confidentiality-scrub -- enforce on this repository (denylist from secret)
-        if: github.repository_owner == 'epicurean-Paradox'
+        # Same-repo refs only: fork PRs receive no secrets, so REQUIRE=1 would
+        # false-fail every external contribution. Fork-sourced code is still
+        # scanned by the post-merge push run (secrets present) + maintainer review.
+        if: >-
+          github.repository_owner == 'epicurean-Paradox' &&
+          (github.event_name == 'push' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
         env:
           SCRUB_TERMS: ${{ secrets.SCRUB_TERMS }}
           PR_TITLE: ${{ github.event.pull_request.title }}
