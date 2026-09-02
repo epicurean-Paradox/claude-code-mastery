@@ -32,8 +32,8 @@ were assessed:
 
 | Tier | Contents | Sole writer | Fork's access |
 |---|---|---|---|
-| **L0 — immutable SSOT** | Hand-authored precedent: LESSONS/LEDGER, bok `decisions/instruments/hubs/frameworks/exceptions`, all `_graph/` notes, second-brain `raw/`. | **Human only** | **read-only** (prose) |
-| **L1 — deterministic-derived** | Mechanically regenerated from a named SSOT by a **no-LLM** transform (bok `_state/`). Reproducible byte-for-byte modulo `generated-at`. | **`sync.py` only** (whole-file overwrite) | read-only |
+| **L0 — immutable SSOT** | Hand-authored precedent: LESSONS/LEDGER, bok `decisions/instruments/hubs/frameworks/exceptions`, all `_graph/` notes, second-brain `raw/`. | **Human-accountable authorship** (Amendment A1) | **read-only** (prose) |
+| **L1 — deterministic-derived** | Mechanically regenerated from a named SSOT by a **no-LLM** transform (bok `_state/`, code graphs). Reproducible byte-for-byte modulo `generated-at`. | **Named deterministic tools** (Amendment A1) | read-only |
 | **L2 — AI-synthesized** | The fork's product: summaries, extracted patterns, embedding index, cross-link/backlink maps, contradiction flags. Second-brain `wiki/`. | **fork only** | read-write, **only here** |
 
 **Invariant — prose flows down, links CRUD across all tiers (operator ruling 2026-09-02):**
@@ -57,7 +57,7 @@ Bedrock — no `api.anthropic.com`, no OpenAI/Grok/Perplexity/Gemini direct call
   cross-region inference profile, matching the existing 242 setup — memory
   `reference_bedrock_chat_config`).
 - **Embeddings**: **Bedrock** (Titan/Cohere), replacing both local Ollama and the remote
-  OpenAI backend. Vectors are stored in **pgvector on the existing Throughline RDS**
+  OpenAI backend. Vectors are stored in **pgvector on an existing operator-managed RDS instance**
   (operator ruling 2026-09-02) — **no OpenSearch Serverless / Bedrock Knowledge Bases
   standing cost**. The index is L2 derived data, never a source of truth; a retrieval hit
   is a SQL similarity query that must resolve to a real note path or be dropped
@@ -192,3 +192,29 @@ transcription.
 **Open sign-off items (schema is taste-grained per L27):** the `layer:`/provenance
 frontmatter field names; the fence-marker syntax; the `DERIVED_VAULT_ROOT` layout; whether
 the bg-agent may write link-fences into L0 at all or only into L2 (the residual-risk knob).
+
+## Amendments
+
+### A1 — Writer definitions clarified (2026-09-02, operator-approved)
+
+- **L0 sole writer = human-accountable authorship.** Text drafted interactively (including
+  AI-assisted drafting in a supervised session), line-reviewed by the operator, and committed
+  under the operator's identity is L0. What L0 excludes is *autonomous / unattended* machine
+  writes — the containment target of §3 and §5. This records existing practice; it is an
+  interpretation of the tier table, not a relaxation of the fork's read-only posture.
+- **L1 sole writer = named deterministic tools.** The writer set is enumerated here, never
+  open-ended: `sync.py` (whole-file overwrite of bok `_state/`) and the hardened Graft fork
+  (pinned at its `gate-hardening` audit commit; plain `build` only — deterministic tree-sitter
+  code graphs, no LLM pass). Adding a writer requires amending this ADR. Untiered generated
+  content is what the tier system exists to prevent.
+
+### A2 — Mission framing: BOK operationalized per vertical (2026-09-02, operator ruling)
+
+The knowledge base this ADR governs is the **operationalization of a Body of Knowledge (BOK)
+per vertical**: knowledge is organized as **graph regions per business vertical** (e.g.
+finance, product, people-ops, revenue, go-to-market, development), each region constituted
+from the sources already ingested, carrying observed-vs-declared truth stamps, and consumed
+under access control. The portable pattern — region map, truth protocol, sensitivity tiers,
+RBAC binding — is specified in `docs/patterns/vertical-knowledge-graph.md` (versioned;
+implementations pin `implements: vertical-knowledge-graph@<version>`). The tier model of
+this ADR (§1) is that pattern's L0/L1/L2 instantiation for this workspace.

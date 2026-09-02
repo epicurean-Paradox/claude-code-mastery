@@ -5,9 +5,9 @@
 set -uo pipefail
 
 LEDGER="$HOME/claude-code-mastery/LEDGER.md"
-FRONTEND="$HOME/npm-dashboard/frontend/src"
+FRONTEND="${LESSON_LOOP_FRONTEND:-$HOME/project/frontend/src}"
 # NOTE: the nav-hint branch requires the ← → arrow PAIR. A bare "to navigate"
-# is ordinary English (matched two legitimate docstrings in npm-dashboard:
+# is ordinary English (matched two legitimate docstrings in a project repo:
 # CommandPalette.tsx JSDoc + NotificationBell.tsx security comment) -- the
 # prototype hint copy always carries the glyphs ("← → to navigate").
 SCAFFOLD_RE='PAGE[[:space:]]+[0-9]+[[:space:]]+OF[[:space:]]+[0-9]+|←[[:space:]]*→|StageLabel|(HAPPY|NON-?HAPPY|WARN|ERROR)[[:space:]]*(・|·|\|)[[:space:]]*[0-9N]'
