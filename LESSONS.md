@@ -767,7 +767,7 @@ This is distinct from Lesson 16, where a test certifies the wrong behaviour. Her
 
 The Branch & PR Pipeline gained a **Red-first gate** (`templates/global.md`): before a PR is ready, every new test is run against the un-fixed code and seen to fail. Its corollaries: enumerate the input shapes a field can hold and test each; when one helper guards N call sites, test the one with the worst consequence; a test whose name claims a property must be able to fail on that property. Where a red-first run is impractical, state in one line what wrong behaviour the test would catch -- if you cannot, it catches nothing.
 
-Worked instance (2026-10-01, PR #33): the regions-validator hardening ran its 8 new tests against the unfixed validator before applying the fix -- 28 failures and 27 errors, then 20/20 green after -- and enumerated every wrong shape per declared field instead of testing the one shape that had been probed.
+Worked instance (2026-10-01, PR #33): the regions-validator hardening ran its 8 new tests against the unfixed validator before applying the fix -- 28 failures and 27 errors, counted per subtest; 20/20 green after. An independent review round then added 6 more, each seen red for the right reason before its fix (26/26 at merge) -- and enumerated every wrong shape per declared field instead of testing the one shape that had been probed.
 
 ### Generalisable pattern
 
@@ -779,7 +779,7 @@ A green test proves the assertion holds over the fixtures, not that the fixtures
 
 ### What happened
 
-A comparison between this repo's `patterns/vertical-knowledge-graph/validate_regions.py` and a sibling validator in a private product repo -- one built against a hostile-input checklist and run under coverage-guided fuzzing -- prompted a set of cheap probes against ours (2026-10-01). Measured on `main`:
+A comparison between this repo's `patterns/vertical-knowledge-graph/validate_regions.py` and a stricter validator written to a hostile-input checklist prompted a set of cheap probes against ours (2026-10-01). Measured on `main`:
 
 - A **427-byte** YAML file of nested aliases took 14 s, peaked at 5.8 GB RSS and wrote 2.03 GB to stdout. `yaml.safe_load` keeps aliases as shared references, so the parse was cheap; the blowup was the `E1` error message `repr()`-ing the expanded value.
 - A value of the wrong type (a list where a string belongs, a string where a mapping belongs) raised `TypeError` / `AttributeError` at 26 field/shape combinations and was **silently accepted** at 24 more.
@@ -794,7 +794,7 @@ The validator was written as a checker of honest documents. `safe_load` was read
 
 ### What changed in the system
 
-`validate_regions.py` now (PR #33): refuses YAML aliases at compose time (a `SafeLoader` subclass that raises on `AliasEvent`, before any value is built); reads at most 1 MiB + 1 byte as bytes, so oversize input and invalid encodings are exit 2; checks every field against a declared type table and reports a coded `E9` line instead of raising; makes membership checks hash-safe; and routes every printed line through one function that escapes control characters and caps length. The suite pins the clock for the committed example, and `TestHostileInput` enumerates the wrong shapes per field. The checklist for any parser that sits in a gate:
+`validate_regions.py` now (PR #33): refuses YAML aliases at compose time (a `SafeLoader` subclass that raises on `AliasEvent`, before any value is built); reads at most 1 MiB + 1 byte as bytes, so oversize input and invalid encodings are exit 2; checks every field against a declared type table and reports a coded `E9` line instead of raising; makes membership checks hash-safe; and routes every line that can carry document data through one function that escapes control characters and caps length. The suite pins the clock for the committed example, and `TestHostileInput` enumerates the wrong shapes per field. The checklist for any parser that sits in a gate:
 
 1. Bound expansion: refuse aliases/anchors (or any reference construct) before values are built.
 2. Bound input: cap bytes read, read as bytes, decode explicitly.
@@ -805,7 +805,7 @@ The validator was written as a checker of honest documents. `safe_load` was read
 
 ### Generalisable pattern
 
-"Safe" in a library function's name scopes one threat; read what it does not promise. Any value that reaches an error message is output you have not bounded. Treat the file a validator checks as untrusted input even when your own team writes it, because the validator's job is to be right about exactly the files that are wrong. And a check that compares a committed fixture against the wall clock is a time bomb with a fuse the length of its freshness window.
+"Safe" in a library function's name scopes one threat; read what it does not promise. Any value that reaches an error message is output you have not bounded. Treat the file a validator checks as untrusted input even when your own team writes it, because the validator's job is to be right about exactly the files that are wrong. And a check that compares a committed fixture against the wall clock fails on the first run after the fixture's freshness window closes, whatever the change under test.
 
 ---
 
@@ -813,16 +813,16 @@ The validator was written as a checker of honest documents. `safe_load` was read
 
 ### What happened
 
-The same comparison found that the sibling product repo's council topology validator refuses any council whose lenses do not span at least two model families, and briefs the second-family lens to refute the first. This repo's council rules -- the Infra Council Gate's "four lenses, each an independent agent, none of them the author" and the Multi-agent "adversarial verify" pattern -- require independence from the *author* only. Four lenses on one model satisfy them. No incident has been observed here; the gap was found by comparison, and the claim rests on published evidence:
+The same comparison surfaced a council rule this repo lacks: the lenses must span at least two model families. This repo's council rules -- the Infra Council Gate's "four lenses, each an independent agent, none of them the author" and the Multi-agent "adversarial verify" pattern -- require independence from the *author* only. Four lenses on one model satisfy them. No incident has been observed here; the gap was found by comparison. The premise is published; its effect on review councils is inferred, because neither paper tests a council:
 
-- Panickssery, Bowman & Feng, *LLM Evaluators Recognize and Favor Their Own Generations* (arXiv:2404.13076, 2024): "self-preference, where an LLM evaluator scores its own outputs higher than others' while human annotators consider them of equal quality", with a linear correlation between self-recognition and the strength of that bias.
-- Kim, Garg, Peng & Garg, *Correlated Errors in Large Language Models* (arXiv:2506.07962, 2025): on one leaderboard dataset "models agree 60% of the time when both models err"; shared architectures and providers drive the correlation -- and "larger and more accurate models have highly correlated errors, even with distinct architectures and providers."
+- Panickssery, Bowman & Feng, *LLM Evaluators Recognize and Favor Their Own Generations* (arXiv:2404.13076, 2024): "self-preference, where an LLM evaluator scores its own outputs higher than others' while human annotators consider them of equal quality", and, by fine-tuning, a linear correlation between self-recognition and the strength of that bias.
+- Kim, Garg, Peng & Garg, *Correlated Errors in Large Language Models* (arXiv:2506.07962, 2025): on one leaderboard dataset "models agree 60% of the time when both models err"; factors driving the correlation include shared architectures and providers -- and "larger and more accurate models have highly correlated errors, even with distinct architectures and providers."
 
 ### What was wrong with the response
 
-"Independent agent" was read as "separate context window". Separate contexts on one model share weights, training data and blind spots: that is independence of process, not of error. A reviewer on the author's model is also the self-preference setup the first paper measures. Model *tiers* within one provider (a top-tier and a mid-tier model of the same family) are not different families either.
+"Independent agent" was read as "separate context window". Separate contexts on one model share weights, training data and blind spots: that is independence of process, not of error. A reviewer on the author's model is the closest council analogue of the setup the first paper measures (an LLM judging its own generations). Here, model tiers within one provider (a top-tier and a mid-tier model) count as one family; that is this lesson's definition, not a finding of either paper.
 
-Note that this repo's own PR review already spans families (Lesson 1: a Gemini reviewer and a Claude reviewer on the same PRs); the council rules simply never required it.
+Lesson 1's project did run two families on its PRs (a Gemini reviewer and a Claude reviewer). This repo has no bot reviewers, and the independent reviews on PR #33 and on the PR that added this lesson were a second Claude model reviewing a Claude author: the same-family case described here, disclosed as bounded coverage.
 
 ### What changed in the system
 

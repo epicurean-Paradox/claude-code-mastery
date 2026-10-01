@@ -208,7 +208,7 @@ Parallelism is a property of the *work*, not a speed dial — it only buys speed
 ### Patterns
 
 - **Pipeline-by-default** — no barrier between stages unless a stage genuinely needs ALL prior results.
-- **Adversarial verify** — skeptics must refute, not rubber-stamp; a majority of skeptics kills a finding. Put at least one skeptic on a different model family from the author where the harness offers one; tiers of one provider are not different families, and same-model lenses are independent in process, not in error (LESSONS Lesson 30). If only one family is available, say so as bounded coverage.
+- **Adversarial verify** — skeptics must refute, not rubber-stamp; a majority of skeptics kills a finding. Put at least one skeptic on a different model family from the author where the harness offers one; tiers of one provider count as one family. The rationale is inferred from published self-preference and correlated-error results, not observed in a council here (LESSONS Lesson 30). If only one family is available, say so as bounded coverage.
 - **Loop-until-dry** — re-run finders until a pass produces nothing new.
 - **Completeness critic** — a dedicated agent checks coverage, not correctness.
 - **Multi-modal sweep** — one agent per modality / surface.
@@ -242,13 +242,13 @@ An operator naming an unvetted skill does not override the gate (the request is 
 No infrastructure deployment goes through without a multi-agent council review recorded as an artifact in the repository. Enforce it at call time with a PreToolUse hook (matcher `Bash`) that blocks `terraform apply|destroy|import|taint|state rm|state mv`, `tofu apply|destroy`, `pulumi up|destroy`, `cdk deploy|destroy`, `serverless deploy`, `sam deploy` and CloudFormation stack mutations (the reference `infra-council-guard.sh` is not yet vendored in this repo's `hooks/`).
 
 - **Four lenses minimum, each an independent agent, none of them the author**: reliability / observability (what failure is NOT alarmed?), security / IAM blast radius, IaC architecture and delivery (drift, reproducibility, CI-vs-local), cost / operational burden.
-- **Span model families.** At least one lens, and the refuting skeptic, on a different model family from the author where the harness offers one; the record names each lens's model, and says so when only one family was available. Same-model lenses share blind spots (LESSONS Lesson 30).
+- **Span model families.** At least one lens, including the one assigned to refute the others (see Adversarial verify), on a different model family from the author where the harness offers one; the record names each lens's model, and says so when only one family was available. Same-model lenses are likely to share blind spots: inferred from published results, not yet observed in a council (LESSONS Lesson 30).
 - **The verdict is a committed file**, `docs/council/<YYYY-MM-DD>-<topic>.md`. A conversation is not a record: it cannot be reviewed by the person who inherits the system.
 - **It must POST-DATE the infra it approves.** The hook compares committed timestamps of `infra/` against `docs/council/`, so a stale council fails closed. A verdict that predates its subject reviewed something else.
 - **Record the disagreements and what was rejected**, not only what passed. A council record with no dissent is a rubber stamp and reads as one later.
 - Read-only work is never gated: `plan`, `validate`, `fmt`, `init`, `show`, and every read-only cloud API call. Verify as much as you like before convening.
 
-**Why this exists.** A single-agent deployment of a compliance-evidence stack passed `terraform validate`, `terraform plan`, CI and 50 local tests, and still shipped four defects that only a real apply could surface — including an alarm that could never be created, and a Lambda logging configuration that silently discarded every log line, which disarmed the dead-man's-switch the whole design existed for. A fifth (an unsubscribed SNS endpoint that `terraform plan` reports as "No changes") was found only by chance. Plan-time validation does not see deploy-time reality; independent lenses are the cheapest thing that does.
+**Why this exists.** A single-agent infrastructure deployment passed `terraform validate`, `terraform plan`, CI and its local tests, and still shipped defects that only a real apply could surface — among them an alarm that could never be created, and a logging configuration that silently discarded every log line, disarming the dead-man's switch the design existed for. Another (a notification endpoint never subscribed, which `terraform plan` reports as "No changes") was found only by chance. Plan-time validation does not see deploy-time reality; independent lenses are the cheapest thing that does.
 
 ## Loop Launch Gate
 
