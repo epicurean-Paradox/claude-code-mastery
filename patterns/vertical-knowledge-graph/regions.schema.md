@@ -31,3 +31,8 @@ region entry is DARK by definition and the validator reports it):
 
 Validator exit codes: 0 = pass (warnings allowed), 1 = any error, 2 = file/schema
 unreadable. A validator that parsed zero regions exits 1 (fail-closed).
+
+Input limits (exit 2): a file over 1 MiB, invalid UTF-8, or any YAML alias (`*name`).
+A field of the wrong type (a list where a string belongs, say) is an `E9` error, not a
+crash. Every output line is a single line of at most 240 characters, with control
+characters escaped.

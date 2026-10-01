@@ -11,11 +11,14 @@ Rules enforced (see regions.schema.md):
   E6  row-counts must all be > 0 for an observed region
   E7  empty sources/destinations allowed only when declared-only
   E8  conversation-intelligence or hr sources require erasure_lineage.subject_key
-  E9  a parse that yields zero regions is an error (fail-closed)
+  E9  a parse that yields zero regions is an error (fail-closed); so is a field whose
+      value has the wrong type (reported, never a crash)
   E10 consumers empty on an observed region is an error (warning when declared-only)
   W1  verticals with no region entry are reported DARK (warning)
 
-Exit codes: 0 pass, 1 any error, 2 unreadable input.
+Exit codes: 0 pass, 1 any error, 2 unreadable input (including a file over MAX_BYTES,
+invalid UTF-8, or any YAML alias). Every output line is one physical line of at most
+MAX_LINE characters, so a document value can neither flood nor forge the report.
 """
 
 import sys
@@ -50,6 +53,50 @@ EVIDENCE_KEYS = {
     "describes-commit",
 }
 LINEAGE_CATEGORIES = {"conversation-intelligence", "hr"}
+MAX_BYTES = 1_048_576  # a hand-written regions.yaml is a few KB; bounds parse work
+MAX_LINE = 240
+TRUNCATED = "...<truncated>"
+# Declared type per field. None is "absent" for list/dict fields (the checks below use
+# `or []` / `or {}`), and a wrong type is an E9 error instead of a TypeError downstream.
+DOC_SHAPES = {"verticals": list, "stale-after-days": int, "regions": list}
+REGION_SHAPES = {
+    "vertical": str,
+    "sources": list,
+    "destinations": list,
+    "entities": list,
+    "consumers": list,
+    "rbac": dict,
+    "evidence": dict,
+    "erasure_lineage": dict,
+    "stale-after-days": int,
+}
+
+
+class _NoAliasLoader(yaml.SafeLoader):
+    """SafeLoader that refuses aliases (*name).
+
+    A hand-written regions.yaml has no use for them, and they are the cheapest way to
+    exhaust the validator: a 427-byte file of nested aliases expanded to 5.8 GB of memory
+    and 2 GB of output through the E1 message's repr().
+    """
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.YAMLError("YAML aliases (*name) are not allowed")
+        return super().compose_node(parent, index)
+
+
+def _shape_errors(tag, mapping, shapes):
+    out = []
+    for key, typ in shapes.items():
+        if key not in mapping or (mapping[key] is None and typ in (list, dict)):
+            continue
+        value = mapping[key]
+        if not isinstance(value, typ) or (typ is int and isinstance(value, bool)):
+            out.append(
+                f"E9: {tag} {key} must be {typ.__name__}, got {type(value).__name__}"
+            )
+    return out
 
 
 def _parse_date(value):
@@ -71,6 +118,11 @@ def validate(doc, today=None):
         return (["E9: document is not a mapping"], [])
     if doc.get("pattern") != PATTERN_ID:
         errors.append(f"E1: pattern must be '{PATTERN_ID}', got {doc.get('pattern')!r}")
+    shape = _shape_errors("document", doc, DOC_SHAPES)
+    if not shape and not all(isinstance(v, str) for v in doc.get("verticals") or []):
+        shape.append("E9: document verticals must be a list of strings")
+    if shape:
+        return (errors + shape, warnings)
 
     vocabulary = doc.get("verticals") or []
     if not vocabulary:
@@ -88,6 +140,19 @@ def validate(doc, today=None):
         if not isinstance(region, dict):
             errors.append(f"E9: {tag} is not a mapping")
             continue
+        shape = _shape_errors(tag, region, REGION_SHAPES)
+        if not shape:
+            if not all(
+                s is None or isinstance(s, dict) for s in region.get("sources") or []
+            ):
+                shape.append(f"E9: {tag} sources entries must be mappings")
+            if not isinstance(
+                (region.get("evidence") or {}).get("row-counts") or {}, dict
+            ):
+                shape.append(f"E9: {tag} evidence row-counts must be dict")
+        if shape:
+            errors.extend(shape)
+            continue
         vertical = region.get("vertical")
         tag = f"region[{vertical or i}]"
         if vertical not in vocabulary:
@@ -104,7 +169,7 @@ def validate(doc, today=None):
             status = "declared-only"
 
         tier = region.get("sensitivity_tier")
-        if not isinstance(tier, int) or not 1 <= tier <= 4:
+        if type(tier) is not int or not 1 <= tier <= 4:  # bool is not a tier
             errors.append(f"E3: {tag} sensitivity_tier must be int 1..4")
 
         sources = region.get("sources") or []
@@ -116,9 +181,10 @@ def validate(doc, today=None):
         categories = set()
         for src in sources:
             cat = (src or {}).get("category")
-            if cat not in SOURCE_CATEGORIES:
+            if not isinstance(cat, str) or cat not in SOURCE_CATEGORIES:
                 errors.append(f"E7: {tag} source category {cat!r} unknown")
-            categories.add(cat)
+            else:
+                categories.add(cat)
 
         if categories & LINEAGE_CATEGORIES:
             lineage = region.get("erasure_lineage") or {}
@@ -162,9 +228,7 @@ def validate(doc, today=None):
                 except (ValueError, TypeError):
                     errors.append(f"E4: {tag} evidence verified-at unparseable")
                 counts = evidence.get("row-counts") or {}
-                bad = [
-                    k for k, v in counts.items() if not (isinstance(v, int) and v > 0)
-                ]
+                bad = [k for k, v in counts.items() if not (type(v) is int and v > 0)]
                 if not counts or bad:
                     errors.append(
                         f"E6: {tag} row-counts must be non-empty and all > 0 "
@@ -177,21 +241,35 @@ def validate(doc, today=None):
     return (errors, warnings)
 
 
-def main(argv):
+def _emit(line, stream=None):
+    """Print one physical, bounded line: control characters escaped, length capped."""
+    line = "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in line)
+    if len(line) > MAX_LINE:
+        line = line[: MAX_LINE - len(TRUNCATED)] + TRUNCATED
+    print(line, file=stream)
+
+
+def main(argv, today=None):
     if len(argv) != 2:
         print("usage: validate_regions.py <regions.yaml>", file=sys.stderr)
         return 2
     try:
-        with open(argv[1], encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh)
-    except (OSError, yaml.YAMLError) as exc:
-        print(f"validate_regions: cannot read/parse {argv[1]}: {exc}", file=sys.stderr)
+        with open(argv[1], "rb") as fh:
+            data = fh.read(MAX_BYTES + 1)
+        if len(data) > MAX_BYTES:
+            _emit(f"validate_regions: {argv[1]} exceeds {MAX_BYTES} bytes", sys.stderr)
+            return 2
+        doc = yaml.load(data, Loader=_NoAliasLoader)  # SafeLoader subclass
+    # ValueError: a 5,000-digit integer or an unquoted impossible date (2026-13-45) raises
+    # from PyYAML's constructors; RecursionError: deep nesting in the composer.
+    except (OSError, yaml.YAMLError, ValueError, RecursionError) as exc:
+        _emit(f"validate_regions: cannot read/parse {argv[1]}: {exc}", sys.stderr)
         return 2
-    errors, warnings = validate(doc)
+    errors, warnings = validate(doc, today=today)
     for line in warnings:
-        print(f"WARN  {line}")
+        _emit(f"WARN  {line}")
     for line in errors:
-        print(f"ERROR {line}")
+        _emit(f"ERROR {line}")
     print(f"validate_regions: {len(errors)} error(s), {len(warnings)} warning(s)")
     return 1 if errors else 0
 
