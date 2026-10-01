@@ -589,6 +589,8 @@ The reviewer bot posts some findings as inline comments and others only in the t
 
 The response gate now fetches the complete body of every top-level comment and review (both endpoints -- issue comments AND pull-request reviews -- untruncated), greps them for severity markers, and reconciles every finding against a fix commit or an inline reply before merge. Truncated previews are for triage only, never for the gate.
 
+**Correction (2026-09-09): there are three surfaces, not two.** The rule above named issue comments and pull-request reviews; the inline-thread endpoint (`pulls/<n>/comments`) is a third, and it is the only one with a resolved state. In a later incident a reviewer bot posted a blocker only to `issues/<n>/comments` -- an infra plan that would have deleted a live DNS record -- and the merge went ahead because the gate was reading the other two. The plan's destroy count also sat inside a collapsed `<details>` fold, and the check that computed it passed. The gate now reads `pulls/<n>/reviews`, `pulls/<n>/comments` and `issues/<n>/comments`, all untruncated; a number that decides a merge never sits behind a disclosure widget, and the check that computes it is required (Lesson 18). A gate that names its endpoints is only as good as the enumeration -- where a repo has tooling that sweeps all three, run it instead of remembering.
+
 ### Generalisable pattern
 
 A gate that consumes a reviewer's output must read the same surface the reviewer writes to -- all of it. Any truncation, pagination stop, or "inline only" filter between reviewer and gate is a slot where the highest-severity finding passes silently. Extends Lesson 1: you cannot owe the reviewer a response to a comment you never fetched.
@@ -743,3 +745,89 @@ Two standing patterns. (1) When an operator names an unaudited skill, deliver th
 ### Generalisable pattern
 
 The security gate is not overridden by an explicit request, because the request is not the threat -- the execution is (Lesson 21); route the intent through a trusted channel instead of the gated one. And approval has a grain: direction-level approval does not license wording-level changes, so for anything decided by taste rather than correctness, show the diff and take the sign-off. Councils are how you deliver a named-but-unvetted skill safely; before→after is how you deliver a subjective change to a surface real users read.
+
+---
+
+## Lesson 28 -- A test written from the feature covers the path you built, not the one that hurts
+
+### What happened
+
+In one session, four self-authored tests were green over fixtures that could not violate them. Review caught every one:
+
+1. A revoke step re-flagged answers citing a deleted source by matching `{ref: ...}` citations, while the drafting prompt emits **bare-string** citations. The chunk was deleted, the step reported "0 answers re-flagged", and every affected answer stayed shippable.
+2. A KPI accounting assertion ran only over OPEN cases; a DELIVERED case fell through every bucket.
+3. An endpoint-guard test driven through the ASGI app got a 503 from unconfigured auth before the request ever reached the guard the test was named after.
+4. A retention fallback was tested on the low-stakes window, while the high-blast-radius one (`0` = prune every resolved case) went unpinned.
+
+### What was wrong with the response
+
+This is distinct from Lesson 16, where a test certifies the wrong behaviour. Here every assertion was *correct*; it simply never reached the dangerous input. A test authored from the feature exercises the shape the author had in mind when writing the feature, which is precisely the shape the feature already handles. The input that hurts (a second citation format, a terminal state, an earlier middleware, the extreme config value) is the one the author was not thinking about, so it is the one the fixture omits.
+
+### What changed in the system
+
+The Branch & PR Pipeline gained a **Red-first gate** (`templates/global.md`): before a PR is ready, every new test is run against the un-fixed code and seen to fail. Its corollaries: enumerate the input shapes a field can hold and test each; when one helper guards N call sites, test the one with the worst consequence; a test whose name claims a property must be able to fail on that property. Where a red-first run is impractical, state in one line what wrong behaviour the test would catch -- if you cannot, it catches nothing.
+
+Worked instance (2026-10-01, PR #33): the regions-validator hardening ran its 8 new tests against the unfixed validator before applying the fix -- 28 failures and 27 errors, then 20/20 green after -- and enumerated every wrong shape per declared field instead of testing the one shape that had been probed.
+
+### Generalisable pattern
+
+A green test proves the assertion holds over the fixtures, not that the fixtures contain the dangerous input. Watching the test fail on the old code is the cheapest proof that it can see the defect at all; enumerating shapes and picking the worst call site is how you choose fixtures the author's intuition would not.
+
+---
+
+## Lesson 29 -- A validator is an input boundary; the file it checks can attack it
+
+### What happened
+
+A comparison between this repo's `patterns/vertical-knowledge-graph/validate_regions.py` and a sibling validator in a private product repo -- one built against a hostile-input checklist and run under coverage-guided fuzzing -- prompted a set of cheap probes against ours (2026-10-01). Measured on `main`:
+
+- A **427-byte** YAML file of nested aliases took 14 s, peaked at 5.8 GB RSS and wrote 2.03 GB to stdout. `yaml.safe_load` keeps aliases as shared references, so the parse was cheap; the blowup was the `E1` error message `repr()`-ing the expanded value.
+- A value of the wrong type (a list where a string belongs, a string where a mapping belongs) raised `TypeError` / `AttributeError` at 26 field/shape combinations and was **silently accepted** at 24 more.
+- A string value containing a newline could forge a `validate_regions: 0 error(s)` summary line in the report.
+- Invalid UTF-8 produced a traceback instead of the documented exit 2.
+
+The same pass found that CI validated the committed example against the wall clock. Its evidence was dated 2026-09-01 with a 14-day window, so every run after 2026-09-15 would fail -- and no run had happened since, so nothing had shown it.
+
+### What was wrong with the response
+
+The validator was written as a checker of honest documents. `safe_load` was read as "safe", but it scopes exactly one threat (no code execution) and says nothing about resource bounds. Error messages echoed input values unbounded. Field types were assumed from the schema rather than checked. And the fail-closed exit codes made it look robust: a crash also exits non-zero, so CI "failed closed" by accident -- while an OOM burns the runner and the 24 silent acceptances were a rubber stamp. A gate's parser is part of the gate; if a hostile file can crash it, hang it or make it lie, the gate is open.
+
+### What changed in the system
+
+`validate_regions.py` now (PR #33): refuses YAML aliases at compose time (a `SafeLoader` subclass that raises on `AliasEvent`, before any value is built); reads at most 1 MiB + 1 byte as bytes, so oversize input and invalid encodings are exit 2; checks every field against a declared type table and reports a coded `E9` line instead of raising; makes membership checks hash-safe; and routes every printed line through one function that escapes control characters and caps length. The suite pins the clock for the committed example, and `TestHostileInput` enumerates the wrong shapes per field. The checklist for any parser that sits in a gate:
+
+1. Bound expansion: refuse aliases/anchors (or any reference construct) before values are built.
+2. Bound input: cap bytes read, read as bytes, decode explicitly.
+3. Check shapes: every field against its declared type, as a coded error, never an exception; membership tests that an unhashable value cannot crash.
+4. Bound output: one emit function -- control characters escaped, line length capped -- so a value can neither flood nor forge the report.
+5. Pin the clock: a check over committed fixtures never reads `now()`.
+6. Fuzz it: a coverage-guided harness (Atheris / libFuzzer) with a committed regression corpus the unit suite replays, a short run per PR and a long nightly run under the Loop Launch Gate's caps. A throwaway single-node mutation sweep (2,352 mutations, 0 crashes after the fix) is the cheap version.
+
+### Generalisable pattern
+
+"Safe" in a library function's name scopes one threat; read what it does not promise. Any value that reaches an error message is output you have not bounded. Treat the file a validator checks as untrusted input even when your own team writes it, because the validator's job is to be right about exactly the files that are wrong. And a check that compares a committed fixture against the wall clock is a time bomb with a fuse the length of its freshness window.
+
+---
+
+## Lesson 30 -- Lenses on the same model are not independent; a council spans model families
+
+### What happened
+
+The same comparison found that the sibling product repo's council topology validator refuses any council whose lenses do not span at least two model families, and briefs the second-family lens to refute the first. This repo's council rules -- the Infra Council Gate's "four lenses, each an independent agent, none of them the author" and the Multi-agent "adversarial verify" pattern -- require independence from the *author* only. Four lenses on one model satisfy them. No incident has been observed here; the gap was found by comparison, and the claim rests on published evidence:
+
+- Panickssery, Bowman & Feng, *LLM Evaluators Recognize and Favor Their Own Generations* (arXiv:2404.13076, 2024): "self-preference, where an LLM evaluator scores its own outputs higher than others' while human annotators consider them of equal quality", with a linear correlation between self-recognition and the strength of that bias.
+- Kim, Garg, Peng & Garg, *Correlated Errors in Large Language Models* (arXiv:2506.07962, 2025): on one leaderboard dataset "models agree 60% of the time when both models err"; shared architectures and providers drive the correlation -- and "larger and more accurate models have highly correlated errors, even with distinct architectures and providers."
+
+### What was wrong with the response
+
+"Independent agent" was read as "separate context window". Separate contexts on one model share weights, training data and blind spots: that is independence of process, not of error. A reviewer on the author's model is also the self-preference setup the first paper measures. Model *tiers* within one provider (a top-tier and a mid-tier model of the same family) are not different families either.
+
+Note that this repo's own PR review already spans families (Lesson 1: a Gemini reviewer and a Claude reviewer on the same PRs); the council rules simply never required it.
+
+### What changed in the system
+
+The Infra Council Gate and the Multi-agent "adversarial verify" pattern (`templates/global.md`) now require at least one lens -- and the refuting skeptic -- on a different model family from the author where the harness offers one, and the council record names each lens's model. Where only one family is available, the record says so as bounded coverage (the Cost-honesty rule) instead of presenting same-model lenses as independent.
+
+### Generalisable pattern
+
+Diversity of model reduces correlated error; it does not remove it (the second paper finds strong models correlate across providers). So model-family diversity complements independent probes of the live system (Lesson 11) and never replaces them: a council of different models that never ran the probe still agrees on the same untested assumption.
