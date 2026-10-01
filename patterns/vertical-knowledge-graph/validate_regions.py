@@ -169,7 +169,7 @@ def validate(doc, today=None):
             status = "declared-only"
 
         tier = region.get("sensitivity_tier")
-        if not isinstance(tier, int) or not 1 <= tier <= 4:
+        if type(tier) is not int or not 1 <= tier <= 4:  # bool is not a tier
             errors.append(f"E3: {tag} sensitivity_tier must be int 1..4")
 
         sources = region.get("sources") or []
@@ -228,9 +228,7 @@ def validate(doc, today=None):
                 except (ValueError, TypeError):
                     errors.append(f"E4: {tag} evidence verified-at unparseable")
                 counts = evidence.get("row-counts") or {}
-                bad = [
-                    k for k, v in counts.items() if not (isinstance(v, int) and v > 0)
-                ]
+                bad = [k for k, v in counts.items() if not (type(v) is int and v > 0)]
                 if not counts or bad:
                     errors.append(
                         f"E6: {tag} row-counts must be non-empty and all > 0 "
@@ -251,7 +249,7 @@ def _emit(line, stream=None):
     print(line, file=stream)
 
 
-def main(argv):
+def main(argv, today=None):
     if len(argv) != 2:
         print("usage: validate_regions.py <regions.yaml>", file=sys.stderr)
         return 2
@@ -262,10 +260,12 @@ def main(argv):
             _emit(f"validate_regions: {argv[1]} exceeds {MAX_BYTES} bytes", sys.stderr)
             return 2
         doc = yaml.load(data, Loader=_NoAliasLoader)  # SafeLoader subclass
-    except (OSError, yaml.YAMLError) as exc:
+    # ValueError: a 5,000-digit integer or an unquoted impossible date (2026-13-45) raises
+    # from PyYAML's constructors; RecursionError: deep nesting in the composer.
+    except (OSError, yaml.YAMLError, ValueError, RecursionError) as exc:
         _emit(f"validate_regions: cannot read/parse {argv[1]}: {exc}", sys.stderr)
         return 2
-    errors, warnings = validate(doc)
+    errors, warnings = validate(doc, today=today)
     for line in warnings:
         _emit(f"WARN  {line}")
     for line in errors:

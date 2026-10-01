@@ -20,10 +20,12 @@ from datetime import date
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import yaml  # noqa: E402
 
+import validate_regions  # noqa: E402
 from validate_regions import main, validate  # noqa: E402
 
 TODAY = date(2026, 9, 2)
 VALIDATOR = pathlib.Path(__file__).parent / "validate_regions.py"
+EXAMPLE = pathlib.Path(__file__).parent / "examples" / "acme.regions.yaml"
 
 
 def base_doc():
@@ -59,13 +61,13 @@ def errs(doc):
 
 
 def run_cli(data):
-    """Run main() on a temp file holding `data` (str or bytes): (exit code, stdout, stderr)."""
+    """main() on a temp file holding `data` (str or bytes) at TODAY: (exit, stdout, stderr)."""
     with tempfile.TemporaryDirectory() as d:
         path = pathlib.Path(d) / "regions.yaml"
         path.write_bytes(data.encode() if isinstance(data, str) else data)
         out, err = io.StringIO(), io.StringIO()
         with redirect_stdout(out), redirect_stderr(err):
-            code = main(["validate_regions.py", str(path)])
+            code = main(["validate_regions.py", str(path)], today=TODAY)
         return code, out.getvalue(), err.getvalue()
 
 
@@ -245,8 +247,59 @@ class TestHostileInput(unittest.TestCase):
         )
         _, out, _ = run_cli(yaml.safe_dump(doc))
         lines = out.splitlines()
-        self.assertTrue(all(len(line) <= 300 for line in lines), max(map(len, lines)))
+        self.assertTrue(all(len(line) <= 240 for line in lines), max(map(len, lines)))
         self.assertEqual(sum(line.startswith("validate_regions:") for line in lines), 1)
+
+    def test_unparseable_input_is_one_bounded_stderr_line(self):
+        cases = {
+            "multi-line parser error": "a: [1, 2\n" + "b" * 500 + "\n",
+            "deep nesting": "a: " + "[" * 200_000 + "]" * 200_000 + "\n",
+            "integer over the digit limit": "x: " + "9" * 5000 + "\n",
+            "impossible unquoted date": "verified-at: 2026-13-45\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                code, out, err = run_cli(text)
+                self.assertEqual(code, 2)
+                self.assertEqual(out, "")
+                lines = err.splitlines()
+                self.assertEqual(len(lines), 1, err[:300])
+                self.assertLessEqual(len(lines[0]), 240)
+
+    def test_booleans_are_not_integers(self):
+        doc = base_doc()
+        doc["regions"][0]["sensitivity_tier"] = True
+        self.assertTrue(any(e.startswith("E3") for e in errs(doc)))
+        doc = base_doc()
+        doc["regions"][0]["evidence"]["row-counts"] = {"accounts": True}
+        self.assertTrue(any(e.startswith("E6") for e in errs(doc)))
+
+    def test_null_list_and_mapping_fields_count_as_absent(self):
+        for key, declared in REGION_SHAPES.items():
+            if declared not in (list, dict):
+                continue
+            with self.subTest(field=key):
+                doc = base_doc()
+                doc["regions"][0][key] = None
+                self.assertFalse(any(e.startswith("E9") for e in errs(doc)))
+
+    def test_shape_tables_match_the_validator(self):
+        # A field added to the validator's table must be added here, so the wrong-shape
+        # sweep above exercises it.
+        self.assertEqual(validate_regions.DOC_SHAPES, DOC_SHAPES)
+        self.assertEqual(validate_regions.REGION_SHAPES, REGION_SHAPES)
+
+
+class TestCli(unittest.TestCase):
+    def test_exit_0_on_a_passing_file_and_1_on_a_failing_one(self):
+        self.assertEqual(run_cli(yaml.safe_dump(base_doc()))[0], 0)
+        doc = base_doc()
+        doc["pattern"] = "something-else@9"
+        self.assertEqual(run_cli(yaml.safe_dump(doc))[0], 1)
+
+    def test_acme_example_passes_through_the_real_loader(self):
+        code, out, err = run_cli(EXAMPLE.read_bytes())
+        self.assertEqual(code, 0, out + err)
 
 
 if __name__ == "__main__":
