@@ -304,8 +304,10 @@ jobs:
           bash hooks/confidentiality-scrub.sh --text "$P"
 
       - name: vertical-knowledge-graph -- validator tests + example validates
+        # The example is validated inside the suite at the suite's pinned date
+        # (test_acme_example_passes_with_dark_finance). Validating it here against the
+        # wall clock made every run after its freshness window expired go red.
         run: |
-          python3 -m pip install --user --quiet pyyaml
+          python3 -m pip install --user --quiet pyyaml==6.0.2
           python3 -m py_compile patterns/vertical-knowledge-graph/validate_regions.py
           python3 -m unittest discover -s patterns/vertical-knowledge-graph -p 'test_*.py' -v
-          python3 patterns/vertical-knowledge-graph/validate_regions.py patterns/vertical-knowledge-graph/examples/acme.regions.yaml
