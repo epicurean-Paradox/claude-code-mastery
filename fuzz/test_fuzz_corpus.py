@@ -2,7 +2,7 @@
 
 Every committed seed runs through the same target function the coverage-guided driver uses,
 so what the fuzzer found stays found. Each seed pins its outcome: the exit code for the two
-CLIs, the flag count (or None for "any count, no crash") for evidence-audit. Runs without
+CLIs (plus the reason, for the ledger lint), the flag count for evidence-audit. Runs without
 atheris.
 
 Wrong behaviour this catches: a parser that crashes, breaks its output contract, or changes
@@ -20,21 +20,38 @@ import targets  # noqa: E402
 CORPUS = FUZZ / "corpus"
 
 EXPECTED = {
+    # exit code of validate_regions.main at the suite's pinned date
     "regions": {
         "valid-acme": 0,
+        "stale-evidence": 1,
+        "yaml-alias": 2,
     },
+    # (exit code, text the output must contain): the reason is pinned, not only the code
     "ledger": {
-        "valid-mini": 0,
-        "valid-repo": 0,
+        "valid-mini": (0, "OK"),
+        "valid-small": (0, "OK"),
+        "missing-row": (1, "has NO ledger row"),
+        "orphan-row": (1, "orphan row"),
+        "id-gap": (1, "lesson-id gap"),
         # found by the fuzzer: read_text() raised UnicodeDecodeError
-        "crash-not-utf8": 1,
+        "crash-not-utf8": (1, "not UTF-8"),
+        # found by the fuzzer: an 82-byte file whose 46-digit lesson id made the gap
+        # check build range(1, 7.7e45) and run out of memory
+        "oom-lesson-id-range": (1, "more than 4 digits"),
+        "crash-lesson-id-5000-digits": (1, "more than 4 digits"),
     },
+    # flag count of evidence-audit's scan()
     "evidence": {
         "valid-mini": 1,
-        # found by the fuzzer: open(encoding="utf-8").readlines() raised
-        "crash-not-utf8": None,
+        # found by the fuzzer: open(encoding="utf-8").readlines() raised. Its garbage
+        # also breaks the JSON line, so 0; the next seed proves the scan still runs.
+        "crash-not-utf8": 0,
+        # undecodable bytes inside an otherwise valid line: still scanned, still flags
+        "not-utf8-inside-text": 1,
         # found by the fuzzer: a JSONL line that parses to a non-object reached ev.get()
         "crash-json-not-object": 0,
+        # json.loads raises RecursionError, not JSONDecodeError, on deep nesting
+        "crash-json-deep-nesting": 0,
         # the same class enumerated by hand: every field turns() reads, in a wrong shape.
         # A malformed block is skipped; a well-formed block beside it is still scanned.
         "shape-message-string": 0,
@@ -59,7 +76,11 @@ class TestCorpus(unittest.TestCase):
             for seed, want in seeds.items():
                 with self.subTest(target=target, seed=seed):
                     got = targets.TARGETS[target]((CORPUS / target / seed).read_bytes())
-                    if want is not None:
+                    if target == "ledger":
+                        (code, output), (want_code, needle) = got, want
+                        self.assertEqual(code, want_code, output[:300])
+                        self.assertIn(needle, output)
+                    else:
                         self.assertEqual(got, want)
 
     def test_hook_fixtures_keep_their_verdicts(self):

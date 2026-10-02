@@ -138,7 +138,7 @@ def turns(path):
             continue
         try:
             ev = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):  # deep nesting raises the latter
             continue
         # Transcript events are objects; skip any other JSON value.
         if not isinstance(ev, dict):

@@ -1,16 +1,19 @@
 name: fuzz-nightly
 
 # Deep fuzz run over the three gate parsers; not a merge gate (fuzz-bounded in
-# lesson-gates.yml is). Stop primitives, declared per the Loop Launch Gate:
-# - iteration cap: one run per night, no retry; -max_total_time=1200 per target and
-#   timeout-minutes: 75 for the job
+# lesson-gates.yml is). Stop primitives, declared per the Loop Launch Gate and
+# enforced by the YAML below:
+# - iteration cap: the schedule expires on FUZZ_NIGHTLY_UNTIL (~180 nights); after it
+#   every run fails at its first step until the date is renewed or this file deleted.
+#   Within a night: one run, no retry, -max_total_time=1200 per target, timeout-minutes 75
 # - budget cap: at most 75 GitHub Actions minutes per night (standard runners are free
 #   for public repositories, so the cap is runtime, not spend)
-# - escalation: a failed scheduled run emails the repository owner (GitHub's
-#   workflow-failure notification) and the finding is attached as an artifact
+# - escalation: a failed scheduled run notifies the user who last changed this file's
+#   cron schedule (GitHub's rule for scheduled workflows), and the finding is attached
+#   as an artifact even when timeout-minutes cancels the job
 # Known gap: GitHub disables scheduled workflows after 60 days without repository
-# activity; the disablement is announced by email, but no run fails, so check the
-# Actions tab after a quiet period.
+# activity; that is announced by email but fails no run, so check the Actions tab after
+# a quiet period.
 
 on:
   schedule:
@@ -20,16 +23,32 @@ on:
 permissions:
   contents: read
 
+env:
+  FUZZ_NIGHTLY_UNTIL: "2027-04-01"
+
 jobs:
   fuzz-deep:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
+      - name: schedule expiry (iteration cap)
+        run: |
+          if [ "$(date -u +%F)" \> "$FUZZ_NIGHTLY_UNTIL" ]; then
+            echo "::error::fuzz-nightly expired on $FUZZ_NIGHTLY_UNTIL; renew the date or delete the workflow"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python -m pip install --quiet --no-cache-dir atheris==3.0.0 pyyaml==6.0.2
+      # Carry the grown corpus from night to night, so the run deepens instead of
+      # restarting from the committed seeds.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz-out/*-work
+          key: fuzz-nightly-corpus-${{ github.run_id }}
+          restore-keys: fuzz-nightly-corpus-
       - name: fuzz regions, ledger, evidence (20 min each)
         run: |
           shopt -s nullglob
@@ -41,6 +60,7 @@ jobs:
             python fuzz/fuzz.py "$t" "fuzz-out/$t-work" "${seeds[@]}" \
               -max_total_time=1200 -timeout=10 -max_len=65536 -rss_limit_mb=2048 \
               -artifact_prefix="fuzz-out/$t-" 2>&1 | tee "fuzz-out/$t.log" | tail -3 || true
+            echo "$t final coverage: $(grep -oE 'cov: [0-9]+' "fuzz-out/$t.log" | tail -1)"
             if ! grep -qE '^Done [1-9][0-9]* runs' "fuzz-out/$t.log"; then
               echo "::error::fuzz target $t did not complete a run"; fail=1
             fi
@@ -51,15 +71,13 @@ jobs:
           done
           exit $fail
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()  # also on cancellation by timeout-minutes
         with:
           name: fuzz-nightly-findings
-          path: fuzz-out/
-          if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: fuzz-nightly-corpus
-          path: fuzz-out/*-work/
-          retention-days: 7
+          path: |
+            fuzz-out/*-crash-*
+            fuzz-out/*-timeout-*
+            fuzz-out/*-oom-*
+            fuzz-out/*-slow-unit-*
+            fuzz-out/*.log
           if-no-files-found: ignore

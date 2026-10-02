@@ -16,6 +16,7 @@ permissions:
 jobs:
   gates:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -381,8 +382,10 @@ jobs:
             python fuzz/fuzz.py "$t" "fuzz-out/$t-work" "${seeds[@]}" \
               -max_total_time=40 -timeout=10 -max_len=16384 -rss_limit_mb=2048 \
               -artifact_prefix="fuzz-out/$t-" 2>&1 | tee "fuzz-out/$t.log" | tail -3 || true
+            echo "$t final coverage: $(grep -oE 'cov: [0-9]+' "fuzz-out/$t.log" | tail -1)"
             # The run must have finished and executed inputs: a harness that never
-            # started (import error, bad flag) must not read as "no crash found".
+            # started (import error, bad flag, a parser left uninstrumented -- fuzz.py
+            # exits before fuzzing then) must not read as "no crash found".
             if ! grep -qE '^Done [1-9][0-9]* runs' "fuzz-out/$t.log"; then
               echo "::error::fuzz target $t did not complete a run"; fail=1
             fi
@@ -393,8 +396,13 @@ jobs:
           done
           exit $fail
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()  # also on cancellation by timeout-minutes
         with:
           name: fuzz-bounded-findings
-          path: fuzz-out/
+          path: |
+            fuzz-out/*-crash-*
+            fuzz-out/*-timeout-*
+            fuzz-out/*-oom-*
+            fuzz-out/*-slow-unit-*
+            fuzz-out/*.log
           if-no-files-found: ignore
