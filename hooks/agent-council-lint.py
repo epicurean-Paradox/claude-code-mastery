@@ -2,7 +2,7 @@
 """agent-council-lint.py -- enforces Subagent Model Routing and the Infra Council Gate's
 record format (LESSONS Lesson 30). Run in an adopter repo's CI:
 
-    python3 agent-council-lint.py [--allow-empty] [ROOT]
+    python3 agent-council-lint.py [--allow-empty] [--require-lock] [ROOT]
     python3 agent-council-lint.py --council FILE   # one record, as infra-council-guard.sh does
 
 Agents (ROOT/.claude/agents/**/*.md). The `model:` line is read line by line, the way a
@@ -14,6 +14,17 @@ working agent file is read, so a field this lint does not check (an unquoted ": 
       of the model name and breaks agent launch), naming an alias (opus, sonnet, haiku,
       fable, opusplan, inherit; optionally [1m]) or an Anthropic model id
       (claude-*, a hosted anthropic.* id, claude-*@date)
+  A4  opt-in pinning: when ROOT/.claude/agent-sources.sha256 exists (sha256sum format, e.g.
+      `find .claude/agents -name '*.md' -print0 | xargs -0 sha256sum > .claude/agent-sources.sha256`,
+      plus any prompt files you want pinned), every listed file is a regular file inside the
+      repo (not a symlink, not reached through a symlinked directory outside it, at most
+      MAX_PINNED_BYTES), listed once, and matching its hash; the lock is a regular UTF-8
+      file of at most MAX_BYTES; and every *.md under .claude/agents is listed, README.md
+      and _-prefixed files included. The lint is stateless: it compares the tree with the
+      lock, so a blindly regenerated lock passes -- the pin is as strong as review of the
+      lock file (give it a CODEOWNER). An absent lock is silent unless --require-lock.
+  A5  the agent tree is plain: no symlink under .claude/agents and no directory whose
+      name differs from `agents` only by case, either of which hides agents from this lint
 
 Council records (ROOT/docs/council/**/YYYY-MM-DD-<topic>.md), strict YAML frontmatter:
   C1  filename is YYYY-MM-DD-<topic>.md with a real date
@@ -37,6 +48,8 @@ a pass. Files are decoded as UTF-8 with an optional BOM and CRLF normalised. Out
 characters. Exit 1 on any error, 0 otherwise, 2 on usage. Stdlib + PyYAML only.
 """
 
+import hashlib
+import os
 import re
 import sys
 from datetime import date
@@ -330,6 +343,7 @@ def _line(root, path, rule, msg):
         rel = path.relative_to(root)
     except ValueError:
         rel = path
+    rel = str(rel).replace(":", "%3A")  # the path field must not contain the separator
     line = f"{rel}:{rule}:{msg}"
     line = "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in line)
     return (
@@ -347,11 +361,127 @@ def _files(directory):
     )
 
 
-def check(root, allow_empty=False):
+LOCK_REL = ".claude/agent-sources.sha256"
+LOCK_LINE_RE = re.compile(r"([0-9a-fA-F]{64}) [ *](.+)")
+MAX_PINNED_BYTES = 8 * 1_048_576
+
+
+def _all_agent_files(root):
+    """Every *.md under .claude/agents, README.md and _-prefixed files included."""
+    agents_dir = root / ".claude" / "agents"
+    if not agents_dir.is_dir():
+        return []
+    return sorted(p for p in agents_dir.rglob("*.md") if p.is_file())
+
+
+def check_lock(root, errors, require_lock=False):
+    lock = root / LOCK_REL
+    if not lock.exists() and not lock.is_symlink():
+        if require_lock:
+            errors.append((lock, "A4", f"no {LOCK_REL}, and --require-lock is set"))
+        return
+    if lock.is_symlink() or not lock.is_file():
+        errors.append((lock, "A4", "the lock must be a regular file"))
+        return
+    try:
+        with open(lock, "rb") as fh:
+            data = fh.read(MAX_BYTES + 1)
+    except OSError as exc:
+        errors.append((lock, "A4", f"lock cannot be read: {type(exc).__name__}"))
+        return
+    if len(data) > MAX_BYTES:
+        errors.append((lock, "A4", f"lock exceeds {MAX_BYTES} bytes"))
+        return
+    try:
+        text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeDecodeError:
+        errors.append((lock, "A4", "lock is not valid UTF-8"))
+        return
+    real_root = root.resolve()
+    pinned = set()
+    for number, raw in enumerate(text.split("\n"), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        m = LOCK_LINE_RE.fullmatch(line)
+        if not m:
+            errors.append((lock, "A4", f"line {number} is not '<sha256>  <path>'"))
+            continue
+        digest, rel = m.group(1).lower(), m.group(2)
+        # Every per-entry error is reported against the LOCK, with the pinned path inside
+        # the message: the path is file content, and in the path field of the output line a
+        # ':' or a control character would break the path:RULE:message contract.
+        where = f"line {number} ({_short(rel)})"
+        if any(not ch.isprintable() for ch in rel):
+            errors.append((lock, "A4", f"{where}: path has control characters"))
+            continue
+        if rel.startswith("/") or ".." in Path(rel).parts:
+            errors.append((lock, "A4", f"{where}: not a repo-relative path"))
+            continue
+        key = Path(rel).as_posix()
+        if key in pinned:
+            errors.append((lock, "A4", f"{where}: listed more than once"))
+            continue
+        pinned.add(key)
+        path = root / rel
+        try:
+            if path.is_symlink():
+                problem = "pinned file is a symlink"
+            elif path.is_dir():
+                problem = "pinned path is not a regular file"
+            elif not path.is_file():
+                problem = "pinned file is missing"
+            elif real_root not in path.resolve().parents:
+                problem = "pinned file resolves outside the repo"
+            elif path.stat().st_size > MAX_PINNED_BYTES:
+                problem = f"pinned file exceeds {MAX_PINNED_BYTES} bytes"
+            elif hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                problem = "changed since pinned; review it and re-stamp the lock in the same change"
+            else:
+                problem = ""
+        # A name too long, a permission denied: an error line, not a crash.
+        except OSError as exc:
+            problem = f"pinned path cannot be read: {type(exc).__name__}"
+        if problem:
+            errors.append((lock, "A4", f"{where}: {problem}"))
+    if not pinned:
+        errors.append((lock, "A4", "the lock lists no files"))
+    for agent in _all_agent_files(root):
+        rel = agent.relative_to(root).as_posix()
+        if rel not in pinned:
+            errors.append((agent, "A4", f"not pinned in {LOCK_REL}"))
+
+
+def check_tree(root, errors):
+    """A5: agents Claude Code could load that this lint would never enumerate."""
+    claude = root / ".claude"
+    if not claude.is_dir():
+        return
+    for entry in claude.iterdir():
+        if entry.name.lower() == "agents" and entry.name != "agents":
+            errors.append(
+                (entry, "A5", "a directory named like 'agents' in another case")
+            )
+    agents_dir = claude / "agents"
+    if agents_dir.is_symlink():
+        errors.append((agents_dir, "A5", "the agents directory is a symlink"))
+        return
+    if not agents_dir.is_dir():
+        return
+    for dirpath, dirnames, filenames in os.walk(agents_dir):
+        for name in dirnames + filenames:
+            entry = Path(dirpath) / name
+            if entry.is_symlink():
+                errors.append((entry, "A5", "symlink under the agents directory"))
+
+
+def check(root, allow_empty=False, require_lock=False):
     root = Path(root)
     agents = _files(root / ".claude" / "agents")
     councils = _files(root / "docs" / "council")
     errors = []
+    check_tree(root, errors)
+    check_lock(root, errors, require_lock)
     if not agents and not councils and not allow_empty:
         errors.append(
             (
@@ -371,7 +501,7 @@ def check(root, allow_empty=False):
     )
 
 
-USAGE = "usage: agent-council-lint.py [--allow-empty] [ROOT] | --council FILE"
+USAGE = "usage: agent-council-lint.py [--allow-empty] [--require-lock] [ROOT] | --council FILE"
 
 
 def check_one_council(path):
@@ -393,11 +523,14 @@ def main(argv):
             print(line)
         return 1 if lines else 0
     allow_empty = "--allow-empty" in args
-    args = [a for a in args if a != "--allow-empty"]
+    require_lock = "--require-lock" in args
+    args = [a for a in args if a not in ("--allow-empty", "--require-lock")]
     if len(args) > 1 or any(a.startswith("-") for a in args):
         print(USAGE, file=sys.stderr)
         return 2
-    lines, n_agents, n_councils = check(args[0] if args else ".", allow_empty)
+    lines, n_agents, n_councils = check(
+        args[0] if args else ".", allow_empty, require_lock
+    )
     for line in lines:
         print(line)
     print(

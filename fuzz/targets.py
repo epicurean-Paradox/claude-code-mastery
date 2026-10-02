@@ -94,27 +94,32 @@ def run_evidence(data):
 
 
 COUNCIL_RULES = (
-    {f"A{i}" for i in range(1, 4)} | {f"C{i}" for i in range(1, 10)} | {"ZERO"}
+    {f"A{i}" for i in range(1, 6)} | {f"C{i}" for i in range(1, 10)} | {"ZERO"}
 )
 
 
 def run_council(data):
-    """agent-council-lint over a throwaway repo holding one file: an agent definition when
-    the first byte is even, a council record when it is odd; the rest is the file. Returns
-    (exit code, set of rule tags reported). The filename and the single file are fixed, so
-    C1 and ZERO are covered by the unit tests, not by this target."""
-    kind, body = (data[0] % 2, data[1:]) if data else (0, b"")
+    """agent-council-lint over a throwaway repo. The first byte modulo 3 picks what the rest
+    of the input is: 0 an agent definition, 1 a council record, 2 the A4 pin lock (beside a
+    fixed valid agent file). Returns (exit code, set of rule tags reported). Filenames are
+    fixed, so C1 and ZERO are covered by the unit tests, not by this target."""
+    kind, body = (data[0] % 3, data[1:]) if data else (0, b"")
     root = _TMP / "council-repo"
     shutil.rmtree(
         root, ignore_errors=True
     )  # one tree, rebuilt per input: no inode leak
-    target = (
-        root / ".claude" / "agents" / "fuzz.md"
-        if kind == 0
-        else root / "docs" / "council" / "2026-10-02-fuzz.md"
-    )
+    targets = {
+        0: root / ".claude" / "agents" / "fuzz.md",
+        1: root / "docs" / "council" / "2026-10-02-fuzz.md",
+        2: root / ".claude" / "agent-sources.sha256",
+    }
+    target = targets[kind]
     target.parent.mkdir(parents=True)
     target.write_bytes(body)
+    if kind == 2:
+        agent = root / ".claude" / "agents" / "fuzz.md"
+        agent.parent.mkdir(parents=True)
+        agent.write_bytes(b"---\nmodel: sonnet\n---\nA fixed agent.\n")
     code, output = _quiet(council_lint.main, ["agent-council-lint.py", str(root)])
     assert code in (0, 1), f"exit code {code!r}"
     rules = set()
