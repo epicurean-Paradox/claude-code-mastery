@@ -1,0 +1,248 @@
+#!/usr/bin/env python3
+"""Tests for agent-council-lint.py.
+
+A valid agent and a valid council record must lint clean; each rule has a mutation of
+that fixture which must trip exactly that rule. Wrong behaviour these catch: a lint that
+passes an un-routed subagent, a single-family council presented as independent, a refuter
+on the author's family, or a record with no dissent -- and a lint that fires on the wrong
+rule, which would send an adopter to fix the wrong field.
+"""
+
+import contextlib
+import importlib.util
+import io
+import pathlib
+import tempfile
+import unittest
+
+HERE = pathlib.Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_file_location("acl", HERE / "agent-council-lint.py")
+acl = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(acl)
+
+AGENT = """---
+name: reviewer
+description: Reviews a diff.
+model: sonnet
+---
+You review diffs.
+"""
+
+COUNCIL_NAME = "2026-10-02-vpc-peering.md"
+COUNCIL_META = {
+    "topic": "vpc-peering",
+    "date": "2026-10-02",
+    "author_model": "claude-opus-5-5",
+    "refuter": "security-iam",
+    "lenses": (
+        "  - {lens: reliability-observability, model: claude-sonnet-5-5}\n"
+        "  - {lens: security-iam, model: gemini-2.5-pro}\n"
+        "  - {lens: iac-delivery, model: claude-opus-5-5}\n"
+        "  - {lens: cost-operations, model: claude-haiku-4-5}"
+    ),
+    "single_family_reason": '""',
+    "verdict": "approve-with-conditions",
+}
+COUNCIL_BODY = """
+## Disagreements
+Security wanted the peering route table scoped to two subnets; reliability accepted.
+
+## Rejected
+A transit gateway: more cost than two VPCs justify.
+"""
+
+
+def council(meta=None, body=COUNCIL_BODY, drop=()):
+    fields = dict(COUNCIL_META, **(meta or {}))
+    lines = []
+    for key, value in fields.items():
+        if key in drop:
+            continue
+        lines.append(f"{key}:\n{value}" if key == "lenses" else f"{key}: {value}")
+    return "---\n" + "\n".join(lines) + "\n---\n" + body
+
+
+class Repo:
+    """A throwaway adopter repo with optional agent and council files."""
+
+    def __init__(self, agents=None, councils=None):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self._tmp.name)
+        for name, text in (agents or {}).items():
+            p = self.root / ".claude" / "agents" / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(text.encode() if isinstance(text, str) else text)
+        for name, text in (councils or {}).items():
+            p = self.root / "docs" / "council" / name
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(text.encode() if isinstance(text, str) else text)
+
+    def lint(self, *flags):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = acl.main(["agent-council-lint.py", *flags, str(self.root)])
+        self._tmp.cleanup()
+        lines = out.getvalue().splitlines()
+        return code, {line.split(":", 2)[1] for line in lines}, lines
+
+
+def lint(agents=None, councils=None, *flags):
+    return Repo(agents, councils).lint(*flags)
+
+
+class TestValidFixture(unittest.TestCase):
+    def test_valid_agent_and_council_lint_clean(self):
+        code, rules, lines = lint({"reviewer.md": AGENT}, {COUNCIL_NAME: council()})
+        self.assertEqual((code, lines), (0, []))
+
+    def test_single_family_council_with_a_reason_lints_clean(self):
+        meta = {
+            "lenses": COUNCIL_META["lenses"].replace(
+                "gemini-2.5-pro", "claude-sonnet-5-5"
+            ),
+            "single_family_reason": '"only one provider is approved for this data"',
+        }
+        code, _, lines = lint(None, {COUNCIL_NAME: council(meta)})
+        self.assertEqual((code, lines), (0, []))
+
+    def test_hosted_inference_ids_resolve_to_their_provider(self):
+        self.assertEqual(acl.model_family("eu.anthropic.claude-opus-5"), "anthropic")
+        self.assertEqual(
+            acl.model_family("eu.mistral.pixtral-large-2502-v1:0"), "mistral"
+        )
+        self.assertEqual(acl.model_family("us.meta.llama3-70b"), "meta")
+        self.assertIsNone(acl.model_family("inherit"))
+        self.assertIsNone(acl.model_family("some-new-model"))
+
+
+class TestAgentRules(unittest.TestCase):
+    def cases(self):
+        return {
+            "A1": "no frontmatter here\n",
+            "A2": AGENT.replace("model: sonnet\n", ""),
+            "A3": AGENT.replace("model: sonnet", "model: gpt-5"),
+        }
+
+    def test_each_agent_rule_fires_alone(self):
+        for rule, text in self.cases().items():
+            with self.subTest(rule=rule):
+                code, rules, _ = lint({"a.md": text}, None)
+                self.assertEqual((code, rules), (1, {rule}))
+
+    def test_wrong_shapes_in_agent_frontmatter_are_errors_not_crashes(self):
+        bad = {
+            "list model": AGENT.replace("model: sonnet", "model: [sonnet]"),
+            "alias": "---\nx: &a 1\nmodel: *a\n---\n",
+            "not a mapping": "---\n- model\n---\n",
+            "not utf-8": b"---\nmodel: \xff\n---\n",
+            "deep nesting": "---\nmodel: " + "[" * 5000 + "]" * 5000 + "\n---\n",
+        }
+        for name, text in bad.items():
+            with self.subTest(case=name):
+                code, rules, _ = lint({"a.md": text}, None)
+                self.assertEqual(code, 1)
+                self.assertTrue(rules <= {"A1", "A3"}, rules)
+
+    def test_an_alias_is_refused_even_when_it_expands_to_a_valid_model(self):
+        code, rules, _ = lint({"a.md": "---\nm: &a sonnet\nmodel: *a\n---\n"}, None)
+        self.assertEqual((code, rules), (1, {"A1"}))
+
+
+class TestCouncilRules(unittest.TestCase):
+    def cases(self):
+        one_family = COUNCIL_META["lenses"].replace(
+            "gemini-2.5-pro", "claude-sonnet-5-5"
+        )
+        return {
+            "C1": ("vpc-peering.md", council()),
+            "C2": (COUNCIL_NAME, council(drop=("verdict",))),
+            "C3": (COUNCIL_NAME, council({"date": "2026-10-01"})),
+            "C4": (
+                COUNCIL_NAME,
+                council(
+                    {
+                        "lenses": COUNCIL_META["lenses"].replace(
+                            "cost-operations", "cost"
+                        )
+                    }
+                ),
+            ),
+            "C5": (
+                COUNCIL_NAME,
+                council(
+                    {
+                        "lenses": COUNCIL_META["lenses"].replace(
+                            "claude-haiku-4-5", "inherit"
+                        )
+                    }
+                ),
+            ),
+            # one family is C6, and then the refuter shares it too: C7 (asserted as a pair)
+            "C7": (COUNCIL_NAME, council({"refuter": "iac-delivery"})),
+            "C8": (COUNCIL_NAME, council({"verdict": "maybe"})),
+            "C9": (
+                COUNCIL_NAME,
+                council(body="\n## Disagreements\n\n## Rejected\nNone.\n"),
+            ),
+        } | {"C6+C7": (COUNCIL_NAME, council({"lenses": one_family}))}
+
+    def test_each_council_rule_fires_alone(self):
+        for rule, (name, text) in self.cases().items():
+            with self.subTest(rule=rule):
+                code, rules, _ = lint(None, {name: text})
+                self.assertEqual((code, rules), (1, set(rule.split("+"))))
+
+    def test_missing_dissent_section_is_c9(self):
+        code, rules, _ = lint(
+            None, {COUNCIL_NAME: council(body="\n## Rejected\nNone.\n")}
+        )
+        self.assertEqual((code, rules), (1, {"C9"}))
+
+    def test_wrong_shapes_in_council_frontmatter_are_errors_not_crashes(self):
+        bad = {
+            "lenses a string": council({"lenses": '"four of them"'}),
+            "lens entry a list": council(
+                {"lenses": "  - [security-iam, gemini-2.5-pro]"}
+            ),
+            "refuter a list": council({"refuter": "[security-iam]"}),
+            "date an int": council({"date": "20261002"}),
+            "verdict a mapping": council({"verdict": "{a: 1}"}),
+            "author_model null": council({"author_model": "null"}),
+        }
+        for name, text in bad.items():
+            with self.subTest(case=name):
+                code, rules, _ = lint(None, {COUNCIL_NAME: text})
+                self.assertEqual(code, 1)
+                self.assertTrue(rules, "an error must be reported")
+
+
+class TestZeroAndContract(unittest.TestCase):
+    def test_an_empty_repo_fails_closed(self):
+        self.assertEqual(lint(None, None)[:2], (1, {"ZERO"}))
+
+    def test_allow_empty_passes_an_empty_repo(self):
+        self.assertEqual(lint(None, None, "--allow-empty")[:2], (0, set()))
+
+    def test_allow_empty_still_lints_what_is_there(self):
+        code, rules, _ = lint({"a.md": "no frontmatter\n"}, None, "--allow-empty")
+        self.assertEqual((code, rules), (1, {"A1"}))
+
+    def test_output_lines_are_bounded_and_single(self):
+        meta = {"refuter": '"' + "x" * 5000 + '\\nagent-council-lint: 0 error(s)"'}
+        code, _, lines = lint(None, {COUNCIL_NAME: council(meta)})
+        self.assertEqual(code, 1)
+        self.assertTrue(all(len(line) <= acl.MAX_LINE for line in lines))
+        self.assertTrue(all(line.count(":") >= 2 for line in lines))
+
+    def test_a_control_character_in_a_filename_cannot_split_a_line(self):
+        code, _, lines = lint(None, {"bad\nname.md": council()})
+        self.assertEqual(code, 1)
+        self.assertTrue(all(line.startswith("docs/council/") for line in lines), lines)
+
+    def test_usage_error_is_exit_2(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(acl.main(["agent-council-lint.py", "--bogus"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

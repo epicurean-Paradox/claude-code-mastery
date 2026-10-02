@@ -1,4 +1,4 @@
-"""Fuzz targets over the three parsers that sit in this repo's gates (LESSONS Lesson 29).
+"""Fuzz targets over the four parsers that sit in this repo's gates (LESSONS Lesson 29).
 
 Each run_* takes raw fuzz bytes, drives one parser through the entry point CI and the hooks
 use, and asserts that parser's output contract. An AssertionError is a contract break; any
@@ -35,6 +35,7 @@ regions = _load(
 )
 ledger_lint = _load("lesson_ledger_lint", "hooks/lesson-ledger-lint.py")
 evidence = _load("evidence_audit", "hooks/evidence-audit.py")
+council_lint = _load("agent_council_lint", "hooks/agent-council-lint.py")
 
 TODAY = date(
     2026, 9, 2
@@ -91,5 +92,45 @@ def run_evidence(data):
     return len(flags)
 
 
-TARGETS = {"regions": run_regions, "ledger": run_ledger, "evidence": run_evidence}
-PARSERS = (regions, ledger_lint, evidence)
+COUNCIL_RULES = (
+    {f"A{i}" for i in range(1, 4)} | {f"C{i}" for i in range(1, 10)} | {"ZERO"}
+)
+
+
+def run_council(data):
+    """agent-council-lint over a throwaway repo holding one file: an agent definition when
+    the first byte is even, a council record when it is odd; the rest is the file. Returns
+    (exit code, set of rule tags reported)."""
+    kind, body = (data[0] % 2, data[1:]) if data else (0, b"")
+    root = Path(tempfile.mkdtemp(dir=_TMP))
+    target = (
+        root / ".claude" / "agents" / "fuzz.md"
+        if kind == 0
+        else root / "docs" / "council" / "2026-10-02-fuzz.md"
+    )
+    target.parent.mkdir(parents=True)
+    target.write_bytes(body)
+    code, output = _quiet(council_lint.main, ["agent-council-lint.py", str(root)])
+    assert code in (0, 1), f"exit code {code!r}"
+    rules = set()
+    for line in output.splitlines():
+        if line.startswith("agent-council-lint:"):
+            continue  # the stderr summary
+        parts = line.split(":", 2)
+        assert len(parts) == 3 and parts[1] in COUNCIL_RULES, (
+            f"malformed line {line[:80]!r}"
+        )
+        assert len(line) <= council_lint.MAX_LINE, f"{len(line)}-char output line"
+        rules.add(parts[1])
+    assert "\r" not in output, "unescaped carriage return in output"
+    assert (code == 0) == (not rules), f"exit {code} with rules {sorted(rules)}"
+    return code, rules
+
+
+TARGETS = {
+    "regions": run_regions,
+    "ledger": run_ledger,
+    "evidence": run_evidence,
+    "council": run_council,
+}
+PARSERS = (regions, ledger_lint, evidence, council_lint)
