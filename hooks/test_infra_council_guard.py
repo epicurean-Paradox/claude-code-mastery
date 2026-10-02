@@ -427,29 +427,97 @@ class TestConfiguration(GuardCase):
                 )
 
 
-class TestFailsClosed(GuardCase):
-    def test_a_missing_jq_blocks_with_exit_2(self):
-        r = self.fresh()
+class TestLintInterpreter(GuardCase):
+    def no_yaml_python(self):
+        venv = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, venv)
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True
+        )
+        return venv / "bin"
+
+    def isolated_path(self, python_dir):
+        """A PATH whose only python3 is the one in `python_dir`; every other tool kept."""
         bindir = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, bindir)
-        for d in [str(pathlib.Path(sys.executable).parent)] + os.environ["PATH"].split(
-            ":"
-        ):
+        for d in os.environ["PATH"].split(":"):
             p = pathlib.Path(d)
             if not p.is_dir():
                 continue
             for exe in p.iterdir():
                 name = exe.name
-                if (
-                    name != "jq"
-                    and not (bindir / name).exists()
-                    and os.access(exe, os.X_OK)
-                ):
+                if name.startswith("python") or (bindir / name).exists():
+                    continue
+                if os.access(exe, os.X_OK):
                     (bindir / name).symlink_to(exe)
-        blocked, reason = r.run(APPLY, path=str(bindir))
-        self.assertTrue(blocked)
-        self.assertIn("EXIT2", reason)
-        self.assertIn("jq not found on PATH", reason)
+        # A wrapper, not a symlink: a python3 reached through a symlink outside its venv
+        # does not find pyvenv.cfg and runs as the base interpreter (seen on Linux CI).
+        wrapper = bindir / "python3"
+        wrapper.write_text(f'#!/bin/sh\nexec "{python_dir / "python3"}" "$@"\n')
+        wrapper.chmod(0o755)
+        return str(bindir)
+
+    def test_a_python3_without_pyyaml_first_on_path_is_skipped(self):
+        r = self.fresh(council({"lenses": ONE_FAMILY}))
+        path = f"{self.no_yaml_python()}:{pathlib.Path(sys.executable).parent}:{os.environ['PATH']}"
+        # still linted (C6), by the next python3 that has PyYAML
+        self.assertBlocked(r.run(APPLY, path=path), "C6")
+
+    def test_a_python3_that_reads_stdin_does_not_hide_later_candidates(self):
+        r = self.fresh(council({"lenses": ONE_FAMILY}))
+        drain = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, drain)
+        (drain / "python3").write_text("#!/bin/sh\ncat >/dev/null\nexit 1\n")
+        (drain / "python3").chmod(0o755)
+        path = f"{drain}:{pathlib.Path(sys.executable).parent}:{os.environ['PATH']}"
+        # the PyYAML python3 after it is still found, so the record is linted (C6)
+        self.assertBlocked(r.run(APPLY, path=path), "C6")
+
+    def test_no_python3_with_pyyaml_blocks(self):
+        r = self.fresh()
+        path = self.isolated_path(self.no_yaml_python())
+        self.assertBlocked(r.run(APPLY, path=path), "No python3 with PyYAML")
+
+    def test_infra_council_python_overrides_path(self):
+        r = self.fresh()
+        path = self.isolated_path(self.no_yaml_python())
+        env = {"INFRA_COUNCIL_PYTHON": sys.executable}
+        self.assertAllowed(r.run(APPLY, path=path, env=env))
+
+    def test_an_infra_council_python_without_pyyaml_blocks(self):
+        r = self.fresh()
+        env = {"INFRA_COUNCIL_PYTHON": str(self.no_yaml_python() / "python3")}
+        self.assertBlocked(r.run(APPLY, env=env), "No python3 with PyYAML")
+
+
+class TestFailsClosed(GuardCase):
+    def path_without(self, missing):
+        bindir = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, bindir)
+        dirs = [str(pathlib.Path(sys.executable).parent)] + os.environ["PATH"].split(
+            ":"
+        )
+        for d in dirs:
+            p = pathlib.Path(d)
+            if not p.is_dir():
+                continue
+            for exe in p.iterdir():
+                name = exe.name
+                if name == missing or (bindir / name).exists():
+                    continue
+                if os.access(exe, os.X_OK):
+                    (bindir / name).symlink_to(exe)
+        return str(bindir)
+
+    def test_a_missing_tool_blocks_with_exit_2(self):
+        # grep/awk/sed/tr failing inside an `if` would read as "no mutation" and allow.
+        r = self.fresh()
+        for tool in ("jq", "git", "grep", "awk", "sed", "tr"):
+            with self.subTest(tool=tool):
+                blocked, reason = r.run(APPLY, path=self.path_without(tool))
+                self.assertTrue(blocked)
+                self.assertIn("EXIT2", reason)
+                self.assertIn(f"{tool} not found on PATH", reason)
 
     def test_an_unexpected_command_failure_blocks_with_exit_2(self):
         # A git subcommand failing mid-hook must block, not fall through to an allow.
