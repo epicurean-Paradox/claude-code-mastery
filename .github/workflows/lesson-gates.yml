@@ -149,21 +149,27 @@ jobs:
           echo "${GITLEAKS_SHA256}  $D/gitleaks.tgz" | sha256sum -c -
           tar -xzf "$D/gitleaks.tgz" -C "$D" gitleaks
           echo "$D" >> "$GITHUB_PATH"
+          # A shallow clone would scan one commit and pass; the scan is only full-history
+          # while checkout keeps fetch-depth: 0.
+          [ "$(git rev-parse --is-shallow-repository)" = false ] || { echo "::error::shallow clone: gitleaks would not see the history"; exit 1; }
           "$D/gitleaks" git --redact --no-banner --exit-code 1 .
 
       - name: gitleaks -- a key deleted from the tree but left in history MUST fail
         run: |
+          command -v gitleaks >/dev/null || { echo "::error::gitleaks not on PATH; the self-test would pass vacuously"; exit 1; }
           R="$(mktemp -d)"; git -C "$R" init -q
           # Generated at run time, so no key-shaped literal is ever committed to this repo.
-          KEY="AKIA$(python3 -c 'import secrets; print("".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") for _ in range(16)))')"
+          # 16 distinct characters keep it above the aws-access-token rule's entropy floor.
+          KEY="AKIA$(python3 -c 'import secrets; print("".join(secrets.SystemRandom().sample("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567", 16)))')"
           printf 'aws_access_key_id = %s\n' "$KEY" > "$R/creds.cfg"
           git -C "$R" add creds.cfg
           git -C "$R" -c user.name=ci -c user.email=ci@example.invalid commit -q -m poisoned
           git -C "$R" rm -q creds.cfg
           git -C "$R" -c user.name=ci -c user.email=ci@example.invalid commit -q -m "remove it"
-          if gitleaks git --redact --no-banner --exit-code 1 "$R" >/dev/null 2>&1; then
-            echo "::error::gitleaks passed a key that is still in history"; exit 1
-          fi
+          # A leak exits 42; a gitleaks error exits 1. Requiring 42 means a crashed or
+          # misconfigured scanner cannot pass as a detection.
+          RC=0; gitleaks git --redact --no-banner --exit-code 42 "$R" >/dev/null 2>&1 || RC=$?
+          [ "$RC" -eq 42 ] || { echo "::error::gitleaks exit $RC on a key still in history (want 42)"; exit 1; }
           echo "key left in history detected as expected"
 
       - name: python-format -- formats a Python file after Write (ruff present)
@@ -184,8 +190,8 @@ jobs:
           echo "non-Python file untouched as expected"
 
       - name: ruff -- lint + format gate over the repo's own Python
-        # ruff 0.15.9 is installed by the python-format step above.
         run: |
+          python3 -m pip install --user --quiet ruff==0.15.9
           python3 -m ruff check --output-format concise .
           python3 -m ruff format --check .
 
