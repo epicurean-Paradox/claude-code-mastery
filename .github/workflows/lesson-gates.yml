@@ -286,11 +286,10 @@ jobs:
         run: |
           cp LEDGER.md /tmp/LEDGER.bak
           sed -i 's#`hooks/loop-cap-guard.sh`#`hooks/does-not-exist.sh`#' LEDGER.md
-          if python3 hooks/lesson-ledger-lint.py; then
-            cp /tmp/LEDGER.bak LEDGER.md
-            echo "::error::linter did NOT fail on a dangling gate reference"; exit 1
-          fi
+          RC=0; OUT="$(python3 hooks/lesson-ledger-lint.py 2>&1)" || RC=$?
           cp /tmp/LEDGER.bak LEDGER.md
+          [ "$RC" -eq 1 ] || { echo "::error::linter exit $RC on a dangling gate reference (want 1)"; exit 1; }
+          printf '%s\n' "$OUT" | grep -q '^LEDGER.md:GATE:' || { echo "::error::no LEDGER.md:GATE line"; printf '%s\n' "$OUT"; exit 1; }
           echo "dangling-gate correctly flagged"
 
       - name: confidentiality-scrub -- syntax + shellcheck
@@ -354,6 +353,59 @@ jobs:
           python3 -m pip install --user --quiet pyyaml==6.0.2
           python3 -m py_compile patterns/vertical-knowledge-graph/validate_regions.py
           python3 -m unittest discover -s patterns/vertical-knowledge-graph -p 'test_*.py' -v
+
+      - name: email-scan -- no address outside reserved example domains in the tree
+        run: |
+          bash -n hooks/email-scan.sh
+          shellcheck -S error hooks/email-scan.sh
+          bash hooks/email-scan.sh .
+
+      - name: email-scan -- a real-looking address MUST fail, a reserved one MUST pass
+        run: |
+          R="$(mktemp -d)"; git -C "$R" init -q
+          # Built at run time, so no address-shaped literal is committed here.
+          AT=@  # every test address is assembled at run time: none is committed here
+          printf 'owner: jane.doe%sacme-widgets.io\n' "$AT" > "$R/a.txt"
+          git -C "$R" add a.txt
+          if bash hooks/email-scan.sh "$R" >/dev/null; then echo "::error::email-scan passed a real-looking address"; exit 1; fi
+          OUT="$(bash hooks/email-scan.sh "$R" || true)"
+          case "$OUT" in *@*) echo "::error::email-scan printed the address it caught"; exit 1 ;; esac
+          # A reserved name used as a subdomain of a real one is not reserved.
+          printf 'owner: x%sexample.com.attacker.io\n' "$AT" > "$R/a.txt"; git -C "$R" add a.txt
+          if bash hooks/email-scan.sh "$R" >/dev/null; then echo "::error::email-scan passed example.com.<real>"; exit 1; fi
+          # Binary files are scanned too (document metadata is the usual carrier).
+          printf '%%PDF\0 Author: jane%sacme.io\n' "$AT" > "$R/a.txt"; git -C "$R" add a.txt
+          if bash hooks/email-scan.sh "$R" >/dev/null; then echo "::error::email-scan skipped a binary file"; exit 1; fi
+          for ok in example.invalid example.com EXAMPLE.ORG; do
+            printf 'owner: ci%s%s\n' "$AT" "$ok" > "$R/a.txt"; git -C "$R" add a.txt
+            bash hooks/email-scan.sh "$R" >/dev/null || { echo "::error::email-scan failed reserved $ok"; exit 1; }
+          done
+          # Nothing to scan is a failure, not a pass.
+          E="$(mktemp -d)"; git -C "$E" init -q
+          RC=0; bash hooks/email-scan.sh "$E" >/dev/null 2>&1 || RC=$?
+          [ "$RC" -eq 2 ] || { echo "::error::email-scan exit $RC on a repo with no tracked files (want 2)"; exit 1; }
+          echo "email-scan self-test passed"
+
+      - name: evidence-audit -- --file output is path:RULE:message
+        run: |
+          check() {  # $1 fixture path, $2.. rules that must appear
+            local f="$1"; shift
+            OUT="$(python3 hooks/evidence-audit.py --file "$f" || true)"
+            [ -n "$OUT" ] || { echo "::error::no output for $f"; exit 1; }
+            if printf '%s\n' "$OUT" | grep -vqE "^${f}:(CAUSAL|ABSENCE|STATE):turn [0-9]+: .+"; then
+              echo "::error::a line breaks path:RULE:message"; printf '%s\n' "$OUT"; exit 1
+            fi
+            for rule in "$@"; do
+              printf '%s\n' "$OUT" | grep -qE "^${f}:${rule}:" || { echo "::error::no $rule line for $f"; exit 1; }
+            done
+          }
+          check hooks/test-fixtures/fail_untagged_diagnosis.jsonl CAUSAL
+          check hooks/test-fixtures/fail_absence_state.jsonl ABSENCE STATE
+          # A long path must not squeeze the snippet out of the line.
+          D="$(mktemp -d)/$(printf 'd%.0s' $(seq 1 180))"; mkdir -p "$D"
+          cp hooks/test-fixtures/fail_untagged_diagnosis.jsonl "$D/t.jsonl"
+          check "$D/t.jsonl" CAUSAL
+          echo "evidence-audit --file format ok"
 
       - name: fuzz corpus -- replay every committed seed (Lesson 29)
         # Pure Python, no atheris: what the fuzzer found stays found on every run.

@@ -7,6 +7,9 @@ gate mechanism that does not exist on disk, is a DANGLING NODE — the exact def
 L17 names ("a lesson that isn't a gate gets re-violated"). This linter refuses to
 let that ship.
 
+Output: one `path:RULE:message` line per violation on stdout (rules MISSING, UTF8, ID,
+ZERO, COVERAGE, ORPHAN, GAP, GATE), a summary on stderr.
+
 Checks (all fail-closed — exit 1 on any violation; exit 1 if it parsed nothing):
   1. Coverage      — every LESSONS.md lesson has a LEDGER row (missing row = FAIL).
   2. No orphans    — every LEDGER row maps to a real lesson.
@@ -70,66 +73,94 @@ def resolve_mech(name):
     return ROOT / "hooks" / name
 
 
-def main():
-    fails = []
-    if not LESSONS.exists() or not LEDGER.exists():
-        print("FAIL: LESSONS.md or LEDGER.md missing", file=sys.stderr)
-        return 1
+def _emit(path, rule, msg):
+    """One path:RULE:message line: control characters escaped, at most 240 characters."""
+    line = f"{path}:{rule}:{msg}"
+    line = "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in line)
+    return line if len(line) <= 240 else line[:226] + "...<truncated>"
 
-    try:
-        lessons_text = LESSONS.read_text(encoding="utf-8")
-        ledger_text = LEDGER.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        print(
-            f"FAIL: LESSONS.md or LEDGER.md is not UTF-8 ({exc.reason})",
-            file=sys.stderr,
-        )
+
+def main():
+    fails = []  # (path, RULE, message)
+    if not LESSONS.exists() or not LEDGER.exists():
+        missing = LESSONS.name if not LESSONS.exists() else LEDGER.name
+        print(_emit(missing, "MISSING", "LESSONS.md or LEDGER.md missing"))
         return 1
-    for raw in OVERSIZE_ID_RE.findall(lessons_text + "\n" + ledger_text):
-        fails.append(f"lesson id {raw[:12]}... has more than {MAX_ID_DIGITS} digits")
+    texts = {}
+    for path in (LESSONS, LEDGER):
+        try:
+            texts[path.name] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            print(_emit(path.name, "UTF8", f"not UTF-8 ({exc.reason})"))
+            return 1
+    lessons_text, ledger_text = texts[LESSONS.name], texts[LEDGER.name]
+    for name, text in texts.items():
+        for raw in OVERSIZE_ID_RE.findall(text):
+            fails.append(
+                (
+                    name,
+                    "ID",
+                    f"lesson id {raw[:12]}... has more than {MAX_ID_DIGITS} digits",
+                )
+            )
     lessons = parse_lessons(lessons_text)
     rows = parse_ledger(ledger_text)
 
     # Fail-closed: a linter that parsed nothing must never look green.
     if not lessons:
         fails.append(
-            "parsed ZERO lessons from LESSONS.md (parser broken or file empty)"
+            ("LESSONS.md", "ZERO", "parsed ZERO lessons (parser broken or file empty)")
         )
     if not rows:
-        fails.append("parsed ZERO rows from LEDGER.md (parser broken or file empty)")
+        fails.append(
+            ("LEDGER.md", "ZERO", "parsed ZERO rows (parser broken or file empty)")
+        )
 
     if lessons and rows:
-        # 1. Coverage
         for lid in sorted(lessons):
             if lid not in rows:
                 fails.append(
-                    f"L{lid} ('{lessons[lid][:50]}') has NO ledger row (L17 violation)"
+                    (
+                        "LEDGER.md",
+                        "COVERAGE",
+                        f"L{lid} ('{lessons[lid][:50]}') has NO ledger row (L17 violation)",
+                    )
                 )
-        # 2. Orphans
         for lid in sorted(rows):
             if lid not in lessons:
                 fails.append(
-                    f"ledger row L{lid} maps to no lesson in LESSONS.md (orphan row)"
+                    (
+                        "LEDGER.md",
+                        "ORPHAN",
+                        f"row L{lid} maps to no lesson (orphan row)",
+                    )
                 )
-        # 3. Node integrity — contiguous 1..N in the lesson set
         want = set(range(1, max(lessons) + 1))
         for gap in sorted(want - set(lessons)):
-            fails.append(f"lesson-id gap: L{gap} missing (IDs must be contiguous 1..N)")
+            fails.append(
+                (
+                    "LESSONS.md",
+                    "GAP",
+                    f"lesson-id gap: L{gap} missing (IDs must be contiguous 1..N)",
+                )
+            )
 
-    # 4. Live gates — a named in-repo mechanism must exist
     for lid in sorted(rows):
-        mech = rows[lid]["mech"]
-        for name in set(MECH_RE.findall(mech)):
+        for name in set(MECH_RE.findall(rows[lid]["mech"])):
             target = resolve_mech(name)
             if not target.exists():
                 fails.append(
-                    f"L{lid} names gate '{name}' but {target.relative_to(ROOT)} does not exist (dangling gate)"
+                    (
+                        "LEDGER.md",
+                        "GATE",
+                        f"L{lid} names gate '{name}' but {target.relative_to(ROOT)} does not exist (dangling gate)",
+                    )
                 )
 
     if fails:
-        print(f"lesson-ledger-lint: {len(fails)} violation(s)\n", file=sys.stderr)
-        for f in fails:
-            print(f"  FAIL: {f}", file=sys.stderr)
+        for path, rule, msg in sorted(fails):
+            print(_emit(path, rule, msg))
+        print(f"lesson-ledger-lint: {len(fails)} violation(s)", file=sys.stderr)
         return 1
 
     print(

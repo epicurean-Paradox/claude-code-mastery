@@ -27,7 +27,7 @@ if [ -n "$MODE" ] && [ -f "$MODE" ]; then
   OUT="$(python3 "$PY" --file "$MODE")"; rc=$?
   if [ "$rc" -eq 1 ]; then
     echo "EVIDENCE-AUDIT: $(printf '%s\n' "$OUT" | grep -c .) untagged/unprobed claim(s) in $MODE:"
-    printf '%s\n' "$OUT" | sed 's/^/  - turn /'
+    printf '%s\n' "$OUT" | sed 's/^/  - /'
   else
     echo "EVIDENCE-AUDIT: clean ($MODE) -- causal/absence/state claims are probed or tagged."
   fi

@@ -42,6 +42,7 @@ TODAY = date(
     2026, 9, 2
 )  # the regions suite's pinned date; a fuzz run never reads the clock
 EVIDENCE_KINDS = {"causal", "absence", "state-chain"}
+LEDGER_RULES = {"MISSING", "UTF8", "ID", "ZERO", "COVERAGE", "ORPHAN", "GAP", "GATE"}
 _TMP = Path(tempfile.mkdtemp(prefix="ccm-fuzz-"))
 
 
@@ -78,6 +79,14 @@ def run_ledger(data):
     finally:
         ledger_lint.LESSONS, ledger_lint.LEDGER = saved
     assert code in (0, 1), f"exit code {code!r}"
+    for line in output.splitlines():
+        if line.startswith("lesson-ledger-lint:"):
+            continue  # the summary
+        parts = line.split(":", 2)
+        assert len(parts) == 3 and parts[1] in LEDGER_RULES, (
+            f"malformed line {line[:80]!r}"
+        )
+        assert len(line) <= 240 and "\r" not in line, "unbounded or split line"
     return code, output
 
 
