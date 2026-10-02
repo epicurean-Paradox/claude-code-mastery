@@ -136,6 +136,36 @@ jobs:
           [ -z "$OUT" ] || { echo "::error::secret-scanner intercepted a non-commit command"; exit 1; }
           echo "non-commit command ignored as expected"
 
+      - name: gitleaks -- full-history secret scan (push-time end of Lesson 13)
+        # Pinned release binary with its sha256 hard-coded here, so a re-tagged or
+        # swapped release asset fails the step instead of running.
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          D="$(mktemp -d)"
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 -o "$D/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $D/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$D/gitleaks.tgz" -C "$D" gitleaks
+          echo "$D" >> "$GITHUB_PATH"
+          "$D/gitleaks" git --redact --no-banner --exit-code 1 .
+
+      - name: gitleaks -- a key deleted from the tree but left in history MUST fail
+        run: |
+          R="$(mktemp -d)"; git -C "$R" init -q
+          # Generated at run time, so no key-shaped literal is ever committed to this repo.
+          KEY="AKIA$(python3 -c 'import secrets; print("".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") for _ in range(16)))')"
+          printf 'aws_access_key_id = %s\n' "$KEY" > "$R/creds.cfg"
+          git -C "$R" add creds.cfg
+          git -C "$R" -c user.name=ci -c user.email=ci@example.invalid commit -q -m poisoned
+          git -C "$R" rm -q creds.cfg
+          git -C "$R" -c user.name=ci -c user.email=ci@example.invalid commit -q -m "remove it"
+          if gitleaks git --redact --no-banner --exit-code 1 "$R" >/dev/null 2>&1; then
+            echo "::error::gitleaks passed a key that is still in history"; exit 1
+          fi
+          echo "key left in history detected as expected"
+
       - name: python-format -- formats a Python file after Write (ruff present)
         run: |
           python3 -m pip install --user --quiet ruff==0.15.9 || pipx install ruff==0.15.9
@@ -152,6 +182,12 @@ jobs:
           printf '{"tool_name":"Write","tool_input":{"file_path":"%s"}}' "$F" | bash hooks/python-format.sh
           grep -q '^# heading$' "$F" || { echo "::error::python-format touched a non-Python file"; exit 1; }
           echo "non-Python file untouched as expected"
+
+      - name: ruff -- lint + format gate over the repo's own Python
+        # ruff 0.15.9 is installed by the python-format step above.
+        run: |
+          python3 -m ruff check --output-format concise .
+          python3 -m ruff format --check .
 
       - name: loop-cap-guard -- syntax + shellcheck
         run: |
