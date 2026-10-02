@@ -29,6 +29,8 @@
 #                        (default: docs/council)
 #   INFRA_COUNCIL_LINT   path to agent-council-lint.py (default: next to this hook),
 #                        or "off" to skip the record lint. A missing linter blocks.
+#   INFRA_COUNCIL_PYTHON interpreter for the lint (default: the first python3 on PATH
+#                        that can import PyYAML). None found blocks.
 #
 # Limits: this reads the command TEXT. It over-blocks (a mutation named in a string
 # or heredoc is blocked; run such scripts from a file) and it cannot see through
@@ -149,6 +151,25 @@ is_record() {
     return 0
 }
 
+# The interpreter for the lint: INFRA_COUNCIL_PYTHON if set, else the first python3 on
+# PATH that can import PyYAML (a project venv often shadows the one that has it).
+lint_python() {
+    local candidate
+    if [ -n "${INFRA_COUNCIL_PYTHON:-}" ]; then
+        "$INFRA_COUNCIL_PYTHON" -c 'import yaml' >/dev/null 2>&1 || return 1
+        printf '%s' "$INFRA_COUNCIL_PYTHON"
+        return 0
+    fi
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        if "$candidate" -c 'import yaml' >/dev/null 2>&1; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done < <(type -a -p python3 2>/dev/null || true)
+    return 1
+}
+
 # Prints why `rel` is not a usable committed record for this infra state, or nothing.
 record_reason() {
     local rel="$1" rec_commit="$2" mode tmp out rc=0
@@ -166,10 +187,15 @@ record_reason() {
         printf 'agent-council-lint.py not found at %s. Install it next to this hook, point INFRA_COUNCIL_LINT at it, or set INFRA_COUNCIL_LINT=off.' "$LINT"
         return 0
     fi
+    local py
+    py=$(lint_python) || {
+        printf 'No python3 with PyYAML found for agent-council-lint.py (tried %s). Install PyYAML for one of them, or set INFRA_COUNCIL_PYTHON.' "${INFRA_COUNCIL_PYTHON:-every python3 on PATH}"
+        return 0
+    }
     # Lint the COMMITTED blob, under its own file name (the date in the name is a rule).
     tmp=$(mktemp -d)
     git -C "$REPO" show "HEAD:$rel" >"$tmp/$(basename "$rel")"
-    out=$(python3 "$LINT" --council "$tmp/$(basename "$rel")" 2>&1) || rc=$?
+    out=$("$py" "$LINT" --council "$tmp/$(basename "$rel")" 2>&1) || rc=$?
     rm -rf "$tmp"
     if [ "$rc" -eq 0 ]; then return 0; fi
     printf 'Council record %s fails agent-council-lint (exit %s):\n%s' "$rel" "$rc" "$(printf '%s\n' "$out" | sed -n '1,20p')"
