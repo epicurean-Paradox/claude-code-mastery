@@ -65,8 +65,16 @@ def main():
         print("FAIL: LESSONS.md or LEDGER.md missing", file=sys.stderr)
         return 1
 
-    lessons = parse_lessons(LESSONS.read_text())
-    ledger_text = LEDGER.read_text()
+    try:
+        lessons_text = LESSONS.read_text(encoding="utf-8")
+        ledger_text = LEDGER.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        print(
+            f"FAIL: LESSONS.md or LEDGER.md is not UTF-8 ({exc.reason})",
+            file=sys.stderr,
+        )
+        return 1
+    lessons = parse_lessons(lessons_text)
     rows = parse_ledger(ledger_text)
 
     # Fail-closed: a linter that parsed nothing must never look green.

@@ -100,10 +100,15 @@ def sentences(text):
             yield chunk
 
 
+def _message(ev):
+    msg = ev.get("message")
+    return msg if isinstance(msg, dict) else {}
+
+
 def _content_blocks(ev):
     content = ev.get("content")
     if content is None:
-        content = ev.get("message", {}).get("content")
+        content = _message(ev).get("content")
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     if isinstance(content, list):
@@ -123,7 +128,7 @@ def turns(path):
         return (turn, "\n".join(cur_text), cur_probe) if cur_text else None
 
     try:
-        with open(path, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()
     except FileNotFoundError:
         return
@@ -135,8 +140,11 @@ def turns(path):
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
+        # Transcript events are objects; skip any other JSON value.
+        if not isinstance(ev, dict):
+            continue
         saw_json = True
-        role = ev.get("role") or ev.get("message", {}).get("role")
+        role = ev.get("role") or _message(ev).get("role")
         if role == "user" or ev.get("type") == "user":
             out = flush()
             if out:
@@ -152,21 +160,30 @@ def turns(path):
                     continue
                 t = b.get("type")
                 if t == "text":
-                    cur_text.append(b.get("text", ""))
+                    text = b.get("text", "")
+                    if isinstance(text, str):
+                        cur_text.append(text)
                 elif t == "tool_use":
                     name = b.get("name", "")
+                    if not isinstance(name, str):
+                        continue
                     if name in PROBE_TOOLS:
                         cur_probe = True
                     elif name == "Bash":
-                        cmd = (b.get("input", {}) or {}).get("command", "")
-                        if PROBE_BASH.search(cmd):
+                        tool_input = b.get("input")
+                        cmd = (
+                            tool_input.get("command")
+                            if isinstance(tool_input, dict)
+                            else ""
+                        )
+                        if isinstance(cmd, str) and PROBE_BASH.search(cmd):
                             cur_probe = True
     out = flush()
     if out:
         yield out
     if not saw_json:
         try:
-            with open(path, encoding="utf-8") as fh:
+            with open(path, encoding="utf-8", errors="replace") as fh:
                 yield (0, fh.read(), False)
         except OSError:
             return

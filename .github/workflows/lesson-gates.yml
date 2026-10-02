@@ -353,3 +353,48 @@ jobs:
           python3 -m pip install --user --quiet pyyaml==6.0.2
           python3 -m py_compile patterns/vertical-knowledge-graph/validate_regions.py
           python3 -m unittest discover -s patterns/vertical-knowledge-graph -p 'test_*.py' -v
+
+      - name: fuzz corpus -- replay every committed seed (Lesson 29)
+        # Pure Python, no atheris: what the fuzzer found stays found on every run.
+        run: python3 -m unittest discover -s fuzz -p 'test_*.py' -v
+
+  fuzz-bounded:
+    # 40 s of coverage-guided fuzzing per gate parser on every push and PR. A crash or a
+    # contract break fails the job and uploads the input; add it to fuzz/corpus/<target>/
+    # with its expectation in fuzz/test_fuzz_corpus.py, see it red, then fix.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet --no-cache-dir atheris==3.0.0 pyyaml==6.0.2
+      - name: fuzz regions, ledger, evidence
+        run: |
+          shopt -s nullglob
+          fail=0
+          for t in regions ledger evidence; do
+            seeds=("fuzz/corpus/$t")
+            if [ "$t" = evidence ]; then seeds+=(hooks/test-fixtures); fi
+            mkdir -p "fuzz-out/$t-work"
+            python fuzz/fuzz.py "$t" "fuzz-out/$t-work" "${seeds[@]}" \
+              -max_total_time=40 -timeout=10 -max_len=16384 -rss_limit_mb=2048 \
+              -artifact_prefix="fuzz-out/$t-" 2>&1 | tee "fuzz-out/$t.log" | tail -3 || true
+            # The run must have finished and executed inputs: a harness that never
+            # started (import error, bad flag) must not read as "no crash found".
+            if ! grep -qE '^Done [1-9][0-9]* runs' "fuzz-out/$t.log"; then
+              echo "::error::fuzz target $t did not complete a run"; fail=1
+            fi
+            found=(fuzz-out/"$t"-crash-* fuzz-out/"$t"-timeout-* fuzz-out/"$t"-oom-* fuzz-out/"$t"-slow-unit-*)
+            if [ ${#found[@]} -gt 0 ]; then
+              echo "::error::fuzz target $t produced a finding: ${found[*]}"; fail=1
+            fi
+          done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-bounded-findings
+          path: fuzz-out/
+          if-no-files-found: ignore

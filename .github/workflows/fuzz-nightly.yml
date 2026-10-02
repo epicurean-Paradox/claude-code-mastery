@@ -1,0 +1,65 @@
+name: fuzz-nightly
+
+# Deep fuzz run over the three gate parsers; not a merge gate (fuzz-bounded in
+# lesson-gates.yml is). Stop primitives, declared per the Loop Launch Gate:
+# - iteration cap: one run per night, no retry; -max_total_time=1200 per target and
+#   timeout-minutes: 75 for the job
+# - budget cap: at most 75 GitHub Actions minutes per night (standard runners are free
+#   for public repositories, so the cap is runtime, not spend)
+# - escalation: a failed scheduled run emails the repository owner (GitHub's
+#   workflow-failure notification) and the finding is attached as an artifact
+# Known gap: GitHub disables scheduled workflows after 60 days without repository
+# activity; the disablement is announced by email, but no run fails, so check the
+# Actions tab after a quiet period.
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-deep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --quiet --no-cache-dir atheris==3.0.0 pyyaml==6.0.2
+      - name: fuzz regions, ledger, evidence (20 min each)
+        run: |
+          shopt -s nullglob
+          fail=0
+          for t in regions ledger evidence; do
+            seeds=("fuzz/corpus/$t")
+            if [ "$t" = evidence ]; then seeds+=(hooks/test-fixtures); fi
+            mkdir -p "fuzz-out/$t-work"
+            python fuzz/fuzz.py "$t" "fuzz-out/$t-work" "${seeds[@]}" \
+              -max_total_time=1200 -timeout=10 -max_len=65536 -rss_limit_mb=2048 \
+              -artifact_prefix="fuzz-out/$t-" 2>&1 | tee "fuzz-out/$t.log" | tail -3 || true
+            if ! grep -qE '^Done [1-9][0-9]* runs' "fuzz-out/$t.log"; then
+              echo "::error::fuzz target $t did not complete a run"; fail=1
+            fi
+            found=(fuzz-out/"$t"-crash-* fuzz-out/"$t"-timeout-* fuzz-out/"$t"-oom-* fuzz-out/"$t"-slow-unit-*)
+            if [ ${#found[@]} -gt 0 ]; then
+              echo "::error::fuzz target $t produced a finding: ${found[*]}"; fail=1
+            fi
+          done
+          exit $fail
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-nightly-findings
+          path: fuzz-out/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fuzz-nightly-corpus
+          path: fuzz-out/*-work/
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"q"}}
+{"type":"assistant","message":{"role":"assistant","content":[1, null, ["x"], {"type":"text","text":5}, {"type":"text","text":{"a":1}}]}}
