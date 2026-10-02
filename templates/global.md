@@ -258,6 +258,7 @@ No infrastructure deployment goes through without a multi-agent council review r
 ## Subagent Model Routing
 
 - Every named subagent declares `model:` explicitly — un-set = inherit = parent rates; treat an un-routed subagent as a defect. `inherit` is legitimate, but written down. `hooks/agent-council-lint.py` fails CI on a `.claude/agents/*.md` without it, or with anything after the value on the `model:` line (an inline comment is read as part of the model name).
+- Pin agent prompts and the files they cite: `sha256sum .claude/agents/*.md <prompt files> > .claude/agent-sources.sha256` (`shasum -a 256` on macOS). Once the lock exists, the same lint fails CI when a pinned file changes without the lock being re-stamped in the same change, or when an agent is not pinned, so every prompt change shows up as a reviewed lock diff.
 - Forks cannot be cheapened (always the parent's model; their discount is the shared prompt cache). A skill's `context: fork` is the opposite mechanism (isolated, routable via its `agent:`) — do not conflate them.
 - Route by ambiguity, not task size: top tier for judgment, mid tier for codegen/exploration, bottom tier for lookups only. Any fan-out states agent count x model tier next to its coverage statement.
 

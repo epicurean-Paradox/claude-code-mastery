@@ -61,7 +61,7 @@ EXPECTED = {
         "shape-tool-command-int": 0,
         "shape-tool-name-list": 1,
     },
-    # (exit code, rule tags) of agent-council-lint; first byte even = agent, odd = council
+    # (exit code, rule tags) of agent-council-lint; first byte % 3: 0 agent, 1 council, 2 lock
     "council": {
         "valid-agent": (0, set()),
         "valid-council": (0, set()),
@@ -70,6 +70,13 @@ EXPECTED = {
         "council-single-family-no-reason": (1, {"C6", "C7"}),
         "council-refuter-same-family": (1, {"C7"}),
         "council-no-dissent": (1, {"C9"}),
+        # first byte 2: the A4 pin lock beside a fixed agent file
+        "lock-valid": (0, set()),
+        "lock-drift": (1, {"A4"}),
+        "lock-escape": (1, {"A4"}),
+        # found by the fuzzer: a pinned path with control characters and ':' reached the
+        # path field of the output line and broke the path:RULE:message contract
+        "crash-lock-path-control-chars": (1, {"A4"}),
     },
 }
 

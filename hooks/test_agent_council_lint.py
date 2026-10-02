@@ -365,6 +365,115 @@ class TestSingleRecordMode(unittest.TestCase):
             )
 
 
+class TestSourcePinning(unittest.TestCase):
+    """A4: with .claude/agent-sources.sha256 present (sha256sum format), every pinned file
+    must exist inside the repo and match, and every agent file must be pinned. Wrong
+    behaviour caught: an agent prompt (or a file it cites) changed without the reviewed
+    re-stamp, or a new agent that nobody pinned."""
+
+    LOCK = ".claude/agent-sources.sha256"
+
+    def repo(self, lock_lines=None, extra=None):
+        import hashlib
+
+        r = Repo({"reviewer.md": AGENT}, None)
+        for rel, text in (extra or {}).items():
+            path = r.root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+
+        def digest(rel):
+            return hashlib.sha256((r.root / rel).read_bytes()).hexdigest()
+
+        if lock_lines is None:
+            pinned = [".claude/agents/reviewer.md", *sorted(extra or {})]
+            lock_lines = [f"{digest(rel)}  {rel}" for rel in pinned]
+        else:
+            lock_lines = [
+                line(digest) if callable(line) else line for line in lock_lines
+            ]
+        (r.root / self.LOCK).write_text("\n".join(lock_lines) + "\n")
+        return r
+
+    def test_a_matching_lock_passes(self):
+        r = self.repo(extra={"prompts/review.md": "Review carefully.\n"})
+        self.assertEqual(r.lint()[:2], (0, set()))
+
+    def test_no_lock_means_no_pinning(self):
+        self.assertEqual(lint({"reviewer.md": AGENT}, None)[:2], (0, set()))
+
+    def test_a_changed_pinned_file_is_a4(self):
+        r = self.repo(extra={"prompts/review.md": "Review carefully.\n"})
+        (r.root / "prompts" / "review.md").write_text("Approve everything.\n")
+        code, rules, lines = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(
+            any("prompts/review.md" in line and "changed" in line for line in lines)
+        )
+
+    def test_an_unpinned_agent_is_a4(self):
+        r = self.repo()
+        (r.root / ".claude" / "agents" / "new.md").write_text(AGENT)
+        code, rules, lines = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(
+            any("new.md" in line and "not pinned" in line for line in lines)
+        )
+
+    def test_bad_lock_entries_are_a4_with_their_reason(self):
+        def good(d):
+            return f"{d('.claude/agents/reviewer.md')}  .claude/agents/reviewer.md"
+
+        cases = {
+            "missing file": ([good, "0" * 64 + "  prompts/gone.md"], "is missing"),
+            "parent escape": (
+                [good, "0" * 64 + "  ../outside.md"],
+                "not a repo-relative path",
+            ),
+            "absolute path": (
+                [good, "0" * 64 + "  /etc/hosts"],
+                "not a repo-relative path",
+            ),
+            "control characters": (
+                [good, "0" * 64 + "  a\x01b.md"],
+                "control characters",
+            ),
+            "malformed line": ([good, "not a lock line"], "is not '<sha256>  <path>'"),
+            "empty lock": ([], "lists no files"),
+        }
+        for name, (lines, needle) in cases.items():
+            with self.subTest(case=name):
+                code, rules, out = self.repo(lock_lines=lines).lint()
+                self.assertEqual((code, rules), (1, {"A4"}))
+                self.assertTrue(any(needle in line for line in out), out)
+
+    def test_a_symlinked_pinned_file_is_a4(self):
+        import hashlib
+
+        r = self.repo()
+        outside = pathlib.Path(tempfile.mkdtemp()) / "x.md"
+        outside.write_text("outside\n")
+        (r.root / "prompts").mkdir()
+        (r.root / "prompts" / "x.md").symlink_to(outside)
+        digest = hashlib.sha256(outside.read_bytes()).hexdigest()
+        with open(r.root / self.LOCK, "a") as fh:
+            fh.write(f"{digest}  prompts/x.md\n")
+        code, rules, out = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(any("symlink" in line for line in out), out)
+
+    def test_sha256sum_variants_are_accepted(self):
+        # binary-mode marker, ./ prefix, uppercase hex, CRLF line endings
+        r = self.repo(
+            lock_lines=[
+                lambda d: (
+                    f"{d('.claude/agents/reviewer.md').upper()} *./.claude/agents/reviewer.md\r"
+                )
+            ]
+        )
+        self.assertEqual(r.lint()[:2], (0, set()))
+
+
 class TestZeroAndContract(unittest.TestCase):
     def test_an_empty_repo_fails_closed(self):
         self.assertEqual(lint(None, None)[:2], (1, {"ZERO"}))

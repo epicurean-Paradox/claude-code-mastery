@@ -14,6 +14,11 @@ working agent file is read, so a field this lint does not check (an unquoted ": 
       of the model name and breaks agent launch), naming an alias (opus, sonnet, haiku,
       fable, opusplan, inherit; optionally [1m]) or an Anthropic model id
       (claude-*, a hosted anthropic.* id, claude-*@date)
+  A4  opt-in pinning: when ROOT/.claude/agent-sources.sha256 exists (sha256sum format,
+      e.g. `sha256sum .claude/agents/*.md prompts/*.md > .claude/agent-sources.sha256`),
+      every listed file exists inside the repo, is not a symlink and matches its hash,
+      and every agent file is listed. A prompt changed without re-stamping the lock in
+      the same change fails.
 
 Council records (ROOT/docs/council/**/YYYY-MM-DD-<topic>.md), strict YAML frontmatter:
   C1  filename is YYYY-MM-DD-<topic>.md with a real date
@@ -37,6 +42,7 @@ a pass. Files are decoded as UTF-8 with an optional BOM and CRLF normalised. Out
 characters. Exit 1 on any error, 0 otherwise, 2 on usage. Stdlib + PyYAML only.
 """
 
+import hashlib
 import re
 import sys
 from datetime import date
@@ -347,11 +353,88 @@ def _files(directory):
     )
 
 
+LOCK_REL = ".claude/agent-sources.sha256"
+LOCK_LINE_RE = re.compile(r"([0-9a-fA-F]{64}) [ *](.+)")
+MAX_PINNED_BYTES = 8 * 1_048_576
+
+
+def check_lock(root, agents, errors):
+    lock = root / LOCK_REL
+    if not lock.exists() and not lock.is_symlink():
+        return
+    if lock.is_symlink() or not lock.is_file():
+        errors.append((lock, "A4", "the lock must be a regular file"))
+        return
+    with open(lock, "rb") as fh:
+        data = fh.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        errors.append((lock, "A4", f"lock exceeds {MAX_BYTES} bytes"))
+        return
+    try:
+        text = data.decode("utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    except UnicodeDecodeError:
+        errors.append((lock, "A4", "lock is not valid UTF-8"))
+        return
+    real_root = root.resolve()
+    pinned = set()
+    for number, raw in enumerate(text.split("\n"), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        m = LOCK_LINE_RE.fullmatch(line)
+        if not m:
+            errors.append((lock, "A4", f"line {number} is not '<sha256>  <path>'"))
+            continue
+        digest, rel = m.group(1).lower(), m.group(2)
+        # Every per-entry error is reported against the LOCK, with the pinned path inside
+        # the message: the path is file content, and in the path field of the output line a
+        # ':' or a control character would break the path:RULE:message contract.
+        where = f"line {number} ({_short(rel)})"
+        if any(not ch.isprintable() for ch in rel):
+            errors.append((lock, "A4", f"{where}: path has control characters"))
+            continue
+        if rel.startswith("/") or ".." in Path(rel).parts:
+            errors.append((lock, "A4", f"{where}: not a repo-relative path"))
+            continue
+        path = root / rel
+        pinned.add(Path(rel).as_posix())
+        if path.is_symlink():
+            errors.append((lock, "A4", f"{where}: pinned file is a symlink"))
+        elif not path.is_file():
+            errors.append((lock, "A4", f"{where}: pinned file is missing"))
+        elif real_root not in path.resolve().parents:
+            errors.append(
+                (lock, "A4", f"{where}: pinned file resolves outside the repo")
+            )
+        elif path.stat().st_size > MAX_PINNED_BYTES:
+            errors.append(
+                (lock, "A4", f"{where}: pinned file exceeds {MAX_PINNED_BYTES} bytes")
+            )
+        else:
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            if actual != digest:
+                errors.append(
+                    (
+                        lock,
+                        "A4",
+                        f"{where}: changed since pinned (now {actual[:12]}...); review it "
+                        f"and re-stamp {LOCK_REL} in the same change",
+                    )
+                )
+    if not pinned:
+        errors.append((lock, "A4", "the lock lists no files"))
+    for agent in agents:
+        rel = agent.relative_to(root).as_posix()
+        if rel not in pinned:
+            errors.append((agent, "A4", f"not pinned in {LOCK_REL}"))
+
+
 def check(root, allow_empty=False):
     root = Path(root)
     agents = _files(root / ".claude" / "agents")
     councils = _files(root / "docs" / "council")
     errors = []
+    check_lock(root, agents, errors)
     if not agents and not councils and not allow_empty:
         errors.append(
             (
