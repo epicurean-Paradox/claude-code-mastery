@@ -1,0 +1,142 @@
+pattern: vertical-knowledge-graph@1
+regions:
+- consumers:
+  - name: revops-team
+    recurring_question: Which renewals moved confidence band this week?
+  destinations:
+  - accounts
+  - renewal_snapshots
+  entities:
+  - accounts
+  - renewals
+  - forecasts
+  evidence:
+    describes-commit: 0
+    last-run:
+      at: 2026-09-01T06:00Z
+      id: 4231
+    row-counts:
+      accounts: 1200
+      renewal_snapshots: 340
+    source-health:
+      acme-crm: healthy@2026-09-01
+      dealpost: healthy@2026-08-30
+    verified-at: 2026-09-01
+  rbac:
+    enforced: false
+    scope: graph:read:revenue
+  sensitivity_tier: 2
+  sources:
+  - category: crm
+    health: healthy@2026-09-01
+    name: acme-crm
+  - category: winloss
+    name: dealpost
+  status: observed
+  vertical: revenue
+- consumers:
+  - name: gtm-lead
+    recurring_question: Which campaigns touched accounts now in-funnel?
+  destinations:
+  - campaign_events
+  entities:
+  - campaigns
+  - funnel_stages
+  - calls
+  erasure_lineage:
+    subject_key: speaker_user_id
+  rbac:
+    enforced: false
+    scope: graph:read:gtm
+  sensitivity_tier: 2
+  sources:
+  - category: marketing
+    name: acme-marketing
+  - category: conversation-intelligence
+    name: callscribe
+  status: declared-only
+  vertical: gtm
+- consumers:
+  - name: product-mgmt
+    recurring_question: Which modules does each account actually use?
+  destinations:
+  - platform_events
+  entities:
+  - feature_usage
+  - module_adoption
+  rbac:
+    enforced: false
+    scope: graph:read:product
+  sensitivity_tier: 3
+  sources:
+  - category: product-analytics
+    name: acme-app-events
+  status: declared-only
+  vertical: product
+- consumers:
+  - name: eng-lead
+    recurring_question: Which shipped work maps to which requested capability?
+  destinations:
+  - issues
+  - releases
+  entities:
+  - issues
+  - releases
+  rbac:
+    enforced: false
+    scope: graph:read:development
+  sensitivity_tier: 4
+  sources:
+  - category: ticketing
+    name: acme-tickets
+  - category: vcs
+    name: acme-git
+  status: declared-only
+  vertical: development
+- consumers:
+  - name: cs-team
+    recurring_question: Which accounts show risk signals this quarter?
+  destinations:
+  - account_state
+  entities:
+  - health_signals
+  - churn_indicators
+  erasure_lineage:
+    subject_key: speaker_user_id
+  rbac:
+    enforced: false
+    scope: graph:read:customer
+  sensitivity_tier: 2
+  sources:
+  - category: conversation-intelligence
+    name: callscribe
+  - category: winloss
+    name: dealpost
+  status: declared-only
+  vertical: customer
+- consumers: []
+  destinations: []
+  entities:
+  - group_membership
+  erasure_lineage:
+    subject_key: employee_id
+  notes: Constitutable only after an HR source is ingested; until then an identity
+    edge, not a region.
+  rbac:
+    enforced: false
+    scope: graph:read:people-ops
+  sensitivity_tier: 1
+  sources: []
+  status: declared-only
+  vertical: people-ops
+stale-after-days: 14
+verticals:
+- revenue
+- gtm
+- product
+- development
+- customer
+- people-ops
+- finance
+x: &a 1
+y: *a

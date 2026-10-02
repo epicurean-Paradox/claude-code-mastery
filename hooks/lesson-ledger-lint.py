@@ -34,16 +34,27 @@ MECH_RE = re.compile(
 )
 
 
+# Lesson ids are 1..9999. A longer id is reported, never converted: int() refuses more
+# than 4,300 digits, and the contiguity check would build range(1, id) -- a 46-digit id
+# found by the fuzzer exhausted memory that way.
+MAX_ID_DIGITS = 4
+OVERSIZE_ID_RE = re.compile(
+    r"^(?:## Lesson |\|\s*)(\d{%d,})" % (MAX_ID_DIGITS + 1), re.M
+)
+
+
 def parse_lessons(text):
     return {
         int(m.group(1)): m.group(2).strip()
-        for m in re.finditer(r"^## Lesson (\d+)\s*--\s*(.+)$", text, re.M)
+        for m in re.finditer(r"^## Lesson (\d{1,4})\s*--\s*(.+)$", text, re.M)
     }
 
 
 def parse_ledger(text):
     rows = {}
-    for m in re.finditer(r"^\|\s*(\d+)\s*\|([^\n]*)\|([^\n]*)\|([^\n]*)\|", text, re.M):
+    for m in re.finditer(
+        r"^\|\s*(\d{1,4})\s*\|([^\n]*)\|([^\n]*)\|([^\n]*)\|", text, re.M
+    ):
         rows[int(m.group(1))] = {
             "lesson": m.group(2).strip(),
             "tier": m.group(3).strip(),
@@ -65,8 +76,18 @@ def main():
         print("FAIL: LESSONS.md or LEDGER.md missing", file=sys.stderr)
         return 1
 
-    lessons = parse_lessons(LESSONS.read_text())
-    ledger_text = LEDGER.read_text()
+    try:
+        lessons_text = LESSONS.read_text(encoding="utf-8")
+        ledger_text = LEDGER.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        print(
+            f"FAIL: LESSONS.md or LEDGER.md is not UTF-8 ({exc.reason})",
+            file=sys.stderr,
+        )
+        return 1
+    for raw in OVERSIZE_ID_RE.findall(lessons_text + "\n" + ledger_text):
+        fails.append(f"lesson id {raw[:12]}... has more than {MAX_ID_DIGITS} digits")
+    lessons = parse_lessons(lessons_text)
     rows = parse_ledger(ledger_text)
 
     # Fail-closed: a linter that parsed nothing must never look green.

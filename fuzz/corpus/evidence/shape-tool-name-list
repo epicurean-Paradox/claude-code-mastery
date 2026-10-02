@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"q"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":["Grep"]},{"type":"text","text":"There is no such cron."}]}}

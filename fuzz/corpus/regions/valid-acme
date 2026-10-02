@@ -1,0 +1,85 @@
+# Worked example — fictional B2B SaaS "Acme Metrics".
+# Five constitutable regions, one thin (people-ops), one dark (finance: in the
+# vocabulary, no region entry — the validator reports it DARK).
+pattern: vertical-knowledge-graph@1
+verticals: [revenue, gtm, product, development, customer, people-ops, finance]
+stale-after-days: 14
+
+regions:
+  - vertical: revenue
+    status: observed
+    sensitivity_tier: 2
+    sources:
+      - { name: acme-crm, category: crm, health: healthy@2026-09-01 }
+      - { name: dealpost, category: winloss }
+    entities: [accounts, renewals, forecasts]
+    destinations: [accounts, renewal_snapshots]
+    rbac: { scope: "graph:read:revenue", enforced: false }
+    consumers:
+      - { name: revops-team, recurring_question: "Which renewals moved confidence band this week?" }
+    evidence:
+      source-health: { acme-crm: healthy@2026-09-01, dealpost: healthy@2026-08-30 }
+      row-counts: { accounts: 1200, renewal_snapshots: 340 }
+      last-run: { id: 4231, at: 2026-09-01T06:00Z }
+      verified-at: 2026-09-01
+      describes-commit: 0000000000000000000000000000000000000000
+
+  - vertical: gtm
+    status: declared-only
+    sensitivity_tier: 2
+    sources:
+      - { name: acme-marketing, category: marketing }
+      - { name: callscribe, category: conversation-intelligence }
+    entities: [campaigns, funnel_stages, calls]
+    destinations: [campaign_events]
+    rbac: { scope: "graph:read:gtm", enforced: false }
+    erasure_lineage: { subject_key: speaker_user_id }
+    consumers:
+      - { name: gtm-lead, recurring_question: "Which campaigns touched accounts now in-funnel?" }
+
+  - vertical: product
+    status: declared-only
+    sensitivity_tier: 3
+    sources:
+      - { name: acme-app-events, category: product-analytics }
+    entities: [feature_usage, module_adoption]
+    destinations: [platform_events]
+    rbac: { scope: "graph:read:product", enforced: false }
+    consumers:
+      - { name: product-mgmt, recurring_question: "Which modules does each account actually use?" }
+
+  - vertical: development
+    status: declared-only
+    sensitivity_tier: 4
+    sources:
+      - { name: acme-tickets, category: ticketing }
+      - { name: acme-git, category: vcs }
+    entities: [issues, releases]
+    destinations: [issues, releases]
+    rbac: { scope: "graph:read:development", enforced: false }
+    consumers:
+      - { name: eng-lead, recurring_question: "Which shipped work maps to which requested capability?" }
+
+  - vertical: customer
+    status: declared-only
+    sensitivity_tier: 2
+    sources:
+      - { name: callscribe, category: conversation-intelligence }
+      - { name: dealpost, category: winloss }
+    entities: [health_signals, churn_indicators]
+    destinations: [account_state]
+    rbac: { scope: "graph:read:customer", enforced: false }
+    erasure_lineage: { subject_key: speaker_user_id }
+    consumers:
+      - { name: cs-team, recurring_question: "Which accounts show risk signals this quarter?" }
+
+  - vertical: people-ops
+    status: declared-only          # THIN: identity/authz axis only, no HR connector yet
+    sensitivity_tier: 1
+    sources: []
+    entities: [group_membership]
+    destinations: []
+    rbac: { scope: "graph:read:people-ops", enforced: false }
+    erasure_lineage: { subject_key: employee_id }
+    consumers: []                  # no named consumer -> DEFERRED (validator warning)
+    notes: "Constitutable only after an HR source is ingested; until then an identity edge, not a region."
