@@ -86,20 +86,23 @@ def main():
         missing = LESSONS.name if not LESSONS.exists() else LEDGER.name
         print(_emit(missing, "MISSING", "LESSONS.md or LEDGER.md missing"))
         return 1
-    try:
-        lessons_text = LESSONS.read_text(encoding="utf-8")
-        ledger_text = LEDGER.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        print(_emit("LESSONS.md|LEDGER.md", "UTF8", f"not UTF-8 ({exc.reason})"))
-        return 1
-    for raw in OVERSIZE_ID_RE.findall(lessons_text + "\n" + ledger_text):
-        fails.append(
-            (
-                "LESSONS.md",
-                "ID",
-                f"lesson id {raw[:12]}... has more than {MAX_ID_DIGITS} digits",
+    texts = {}
+    for path in (LESSONS, LEDGER):
+        try:
+            texts[path.name] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            print(_emit(path.name, "UTF8", f"not UTF-8 ({exc.reason})"))
+            return 1
+    lessons_text, ledger_text = texts[LESSONS.name], texts[LEDGER.name]
+    for name, text in texts.items():
+        for raw in OVERSIZE_ID_RE.findall(text):
+            fails.append(
+                (
+                    name,
+                    "ID",
+                    f"lesson id {raw[:12]}... has more than {MAX_ID_DIGITS} digits",
+                )
             )
-        )
     lessons = parse_lessons(lessons_text)
     rows = parse_ledger(ledger_text)
 

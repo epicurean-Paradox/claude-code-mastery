@@ -231,8 +231,10 @@ def main():
         rule = {"causal": "CAUSAL", "absence": "ABSENCE", "state-chain": "STATE"}
         path = sys.argv[2].replace(":", "%3A")
         for t, kind, s in flags:
-            line = f"{path}:{rule[kind]}:turn {t}: {s}"
-            print("".join(ch if ch.isprintable() else " " for ch in line)[:240])
+            head = f"{path}:{rule[kind]}:turn {t}: "
+            snippet = "".join(ch if ch.isprintable() else " " for ch in s)
+            # The cap trims the snippet, never the path or the rule.
+            print(head + snippet[: max(40, 240 - len(head))])
         sys.exit(1 if flags else 0)
 
     if mode == "--stop":

@@ -40,6 +40,8 @@ EXPECTED = {
         # check build range(1, 7.7e45) and run out of memory
         "oom-lesson-id-range": (1, "more than 4 digits"),
         "crash-lesson-id-5000-digits": (1, "more than 4 digits"),
+        # an oversize id in LEDGER.md is reported on LEDGER.md, not LESSONS.md
+        "id-oversize-in-ledger": (1, "LEDGER.md:ID:"),
     },
     # flag count of evidence-audit's scan()
     "evidence": {
