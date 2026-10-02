@@ -427,22 +427,6 @@ jobs:
             echo "::error::agent-council-lint passed an empty tree without --allow-empty"; exit 1
           fi
 
-  red-first:
-    # Lesson 28: every NEW test must fail against the merge base's code, or carry
-    # `# red-first: pins <reason>`. Pull requests only: a push has no merge base to test.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - run: python3 -m pip install --user --quiet pyyaml==6.0.2
-      - name: new tests are red on the merge base
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: python3 hooks/red-first-check.py --base "$(git merge-base "origin/$BASE_REF" HEAD)"
-
   fuzz-bounded:
     # 40 s of coverage-guided fuzzing per gate parser on every push and PR. A crash or a
     # contract break fails the job and uploads the input; add it to fuzz/corpus/<target>/

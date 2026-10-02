@@ -1,0 +1,38 @@
+name: red-first
+
+# Lesson 28: every NEW test in a pull request must fail against the merge base's code and
+# pass at HEAD, or carry `# red-first: pins <reason>`. Its own workflow, pull requests
+# only: a push has no merge base, and a skipped push-event run under the same check name
+# would sit beside the real one.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  red-first:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 -m pip install --user --quiet pyyaml==6.0.2
+      - name: new tests are red on the merge base
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          BASE="$(git merge-base "origin/$BASE_REF" HEAD)"
+          # The base branch's checker judges the PR, so editing hooks/red-first-check.py
+          # in a PR cannot weaken the check on that PR. The PR's copy is used only while
+          # the base has none (the PR that adds it).
+          CHECK="$(mktemp -d)/red-first-check.py"
+          if git show "origin/$BASE_REF:hooks/red-first-check.py" > "$CHECK" 2>/dev/null; then
+            echo "checker: origin/$BASE_REF"
+          else
+            cp hooks/red-first-check.py "$CHECK"
+            echo "::warning::no checker on $BASE_REF; using this PR's copy"
+          fi
+          python3 "$CHECK" --base "$BASE"
