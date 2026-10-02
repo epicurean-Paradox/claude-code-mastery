@@ -334,6 +334,37 @@ class TestReviewFindings(unittest.TestCase):
         self.assertEqual((code, rules), (1, {"C3"}), lines)
 
 
+class TestSingleRecordMode(unittest.TestCase):
+    def run_one(self, text, name=COUNCIL_NAME):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / name
+            path.write_text(text)
+            out = io.StringIO()
+            with (
+                contextlib.redirect_stdout(out),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                code = acl.main(["agent-council-lint.py", "--council", str(path)])
+            return code, {line.split(":", 2)[1] for line in out.getvalue().splitlines()}
+
+    def test_a_valid_record_passes_and_no_zero_rule_applies(self):
+        self.assertEqual(self.run_one(council()), (0, set()))
+
+    def test_a_failing_record_reports_its_rules(self):
+        meta = {
+            "lenses": COUNCIL_META["lenses"].replace(
+                "gemini-2.5-pro", "claude-sonnet-5-5"
+            )
+        }
+        self.assertEqual(self.run_one(council(meta)), (1, {"C6", "C7"}))
+
+    def test_a_missing_file_is_a_usage_error(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(
+                acl.main(["agent-council-lint.py", "--council", "/nope.md"]), 2
+            )
+
+
 class TestZeroAndContract(unittest.TestCase):
     def test_an_empty_repo_fails_closed(self):
         self.assertEqual(lint(None, None)[:2], (1, {"ZERO"}))

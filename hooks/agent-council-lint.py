@@ -3,6 +3,7 @@
 record format (LESSONS Lesson 30). Run in an adopter repo's CI:
 
     python3 agent-council-lint.py [--allow-empty] [ROOT]
+    python3 agent-council-lint.py --council FILE   # one record, as infra-council-guard.sh does
 
 Agents (ROOT/.claude/agents/**/*.md). The `model:` line is read line by line, the way a
 working agent file is read, so a field this lint does not check (an unquoted ": " in
@@ -370,12 +371,31 @@ def check(root, allow_empty=False):
     )
 
 
+USAGE = "usage: agent-council-lint.py [--allow-empty] [ROOT] | --council FILE"
+
+
+def check_one_council(path):
+    """Lint a single council record (infra-council-guard.sh runs this at apply time)."""
+    path = Path(path)
+    errors = []
+    check_council(path, errors)
+    return sorted(_line(path.parent, p, r, m) for p, r, m in errors)
+
+
 def main(argv):
     args = argv[1:]
+    if args[:1] == ["--council"]:
+        if len(args) != 2 or not Path(args[1]).is_file():
+            print(USAGE, file=sys.stderr)
+            return 2
+        lines = check_one_council(args[1])
+        for line in lines:
+            print(line)
+        return 1 if lines else 0
     allow_empty = "--allow-empty" in args
     args = [a for a in args if a != "--allow-empty"]
     if len(args) > 1 or any(a.startswith("-") for a in args):
-        print("usage: agent-council-lint.py [--allow-empty] [ROOT]", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
         return 2
     lines, n_agents, n_councils = check(args[0] if args else ".", allow_empty)
     for line in lines:
