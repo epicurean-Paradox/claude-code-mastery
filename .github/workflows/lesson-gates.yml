@@ -359,9 +359,14 @@ jobs:
         # Pure Python, no atheris: what the fuzzer found stays found on every run.
         run: python3 -m unittest discover -s fuzz -p 'test_*.py' -v
 
-      - name: agent-council-lint -- every rule fires alone on its mutation (Lesson 30)
+      - name: agent-council-lint + infra-council-guard -- rule and gate tests (Lesson 30)
+        # hooks/test_*.py covers both: every lint rule on its own mutation, and the guard
+        # against throwaway git repos (no record, stale, dirty tree, failing record,
+        # raw AWS verbs, COUNCIL_ACK, configured paths).
         run: |
           python3 -m py_compile hooks/agent-council-lint.py
+          bash -n hooks/infra-council-guard.sh
+          shellcheck -S error hooks/infra-council-guard.sh
           python3 -m unittest discover -s hooks -p 'test_*.py' -v
           # The CLI as an adopter runs it. This repo has no agents or councils, so it
           # needs --allow-empty -- and must fail without it (the ZERO rule).
