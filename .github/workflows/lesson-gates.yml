@@ -355,6 +355,32 @@ jobs:
           python3 -m py_compile patterns/vertical-knowledge-graph/validate_regions.py
           python3 -m unittest discover -s patterns/vertical-knowledge-graph -p 'test_*.py' -v
 
+      - name: email-scan -- no address outside reserved example domains in the tree
+        run: |
+          bash -n hooks/email-scan.sh
+          shellcheck -S error hooks/email-scan.sh
+          bash hooks/email-scan.sh .
+
+      - name: email-scan -- a real-looking address MUST fail, a reserved one MUST pass
+        run: |
+          R="$(mktemp -d)"; git -C "$R" init -q
+          # Built at run time, so no address-shaped literal is committed here.
+          printf 'owner: %s@%s.io\n' jane.doe acme-widgets > "$R/a.txt"
+          git -C "$R" add a.txt
+          if bash hooks/email-scan.sh "$R" >/dev/null; then echo "::error::email-scan passed a real-looking address"; exit 1; fi
+          printf 'owner: ci@example.invalid\n' > "$R/a.txt"
+          git -C "$R" add a.txt
+          bash hooks/email-scan.sh "$R" >/dev/null || { echo "::error::email-scan failed a reserved example address"; exit 1; }
+          echo "email-scan self-test passed"
+
+      - name: evidence-audit -- --file output is path:RULE:message
+        run: |
+          F=hooks/test-fixtures/fail_untagged_diagnosis.jsonl
+          OUT="$(python3 hooks/evidence-audit.py --file "$F" || true)"
+          [ -n "$OUT" ] || { echo "::error::no output"; exit 1; }
+          printf '%s\n' "$OUT" | grep -vqE "^${F}:(CAUSAL|ABSENCE|STATE):turn [0-9]+: " && { echo "::error::a line breaks path:RULE:message"; printf '%s\n' "$OUT"; exit 1; }
+          echo "evidence-audit --file format ok"
+
       - name: fuzz corpus -- replay every committed seed (Lesson 29)
         # Pure Python, no atheris: what the fuzzer found stays found on every run.
         run: python3 -m unittest discover -s fuzz -p 'test_*.py' -v

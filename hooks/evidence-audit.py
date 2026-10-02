@@ -228,8 +228,11 @@ def main():
 
     if mode == "--file":
         flags = scan(sys.argv[2])
+        rule = {"causal": "CAUSAL", "absence": "ABSENCE", "state-chain": "STATE"}
+        path = sys.argv[2].replace(":", "%3A")
         for t, kind, s in flags:
-            print(f"{t}\t{kind}\t{s}")
+            line = f"{path}:{rule[kind]}:turn {t}: {s}"
+            print("".join(ch if ch.isprintable() else " " for ch in line)[:240])
         sys.exit(1 if flags else 0)
 
     if mode == "--stop":
