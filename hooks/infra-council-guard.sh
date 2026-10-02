@@ -93,7 +93,10 @@ if printf '%s\n' "$NORM" | grep -qE "$MUTATE_RE"; then IAC=1; fi
 # a mutation if any of its <verb>-<noun> tokens has a config-mutating verb that is not
 # one of the operational calls. An operational call in one segment excuses nothing in
 # another, and `--description put-events` cannot launder `create-role`.
-AWS_VERBS='create|update|put|delete|modify|attach|detach|associate|disassociate|add|remove|replace|tag|untag|enable|disable|register|deregister|set|import|apply|restore|rotate|reset|revoke|authorize|terminate|reboot|run|start|stop|cancel|schedule'
+AWS_VERBS='create|update|put|delete|modify|attach|detach|associate|disassociate|add|remove|replace|tag|untag|enable|disable|register|deregister|set|import|apply|restore|rotate|reset|revoke|authorize|terminate|reboot'
+# run-/start-/stop-/cancel-/schedule- are mostly RUNTIME (run-task, start-query,
+# start-execution, stop-task) and stay open; these named ones change infrastructure.
+AWS_CONTROL='run-instances|start-instances|stop-instances|schedule-key-deletion|cancel-key-deletion|start-db-instance|stop-db-instance|start-db-cluster|stop-db-cluster'
 AWS_OPS='set-alarm-state|put-metric-data|put-log-events|put-events'
 AWS_SEG_RE='(^|[[:space:](/])aws[[:space:]]'
 RAW_AWS=0
@@ -103,7 +106,7 @@ while IFS= read -r seg; do
         RAW_AWS=1
         break
     fi
-    VERB_TOKENS=$(printf '%s\n' "$seg" | tr -s '[:space:]' '\n' | grep -E "^(${AWS_VERBS})-[a-z0-9-]+$" || true)
+    VERB_TOKENS=$(printf '%s\n' "$seg" | tr -s '[:space:]' '\n' | grep -E "^((${AWS_VERBS})-[a-z0-9-]+|${AWS_CONTROL})$" || true)
     if [ -n "$VERB_TOKENS" ] && printf '%s\n' "$VERB_TOKENS" | grep -qvxE "$AWS_OPS"; then
         RAW_AWS=1
         break

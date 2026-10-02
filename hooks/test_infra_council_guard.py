@@ -342,6 +342,37 @@ class TestRawAws(GuardCase):
             with self.subTest(cmd=cmd):
                 self.assertBlocked(r.run(cmd), "No COUNCIL_ACK")
 
+    def test_the_operator_matrix(self):
+        # Cases from the operator's own matrix for the version in use: runtime calls and
+        # reads stay open, config mutations need an ACK whatever precedes them.
+        r = self.repo()
+        allowed = (
+            "aws ecs run-task --cluster c --task-definition t",
+            "aws logs start-query --log-group-name g --start-time 1 --end-time 2 --query-string q",
+            "aws athena start-query-execution --query-string q",
+            "aws stepfunctions start-execution --state-machine-arn a",
+            "aws ecs stop-task --cluster c --task t",
+            "aws configure set region eu-west-1",
+            "aws budgets describe-budgets | python3 -c 'print(\"update-budget\")'",
+            "git commit -m 'update-budget docs'",
+            "aws --profile p ce get-dimension-values --dimension SERVICE",
+        )
+        for cmd in allowed:
+            with self.subTest(allow=cmd):
+                self.assertAllowed(r.run(cmd))
+        blocked = (
+            "aws --profile prod budgets update-budget --account-id 1 --new-budget file://b.json",
+            "AWS_PROFILE=x aws sns set-topic-attributes --topic-arn a --attribute-name P --attribute-value p",
+            "aws s3api put-object --bucket b --key k",
+            "aws budgets describe-budgets && aws budgets delete-budget --account-id 1 --budget-name x",
+            "aws rds stop-db-instance --db-instance-identifier prod",
+            "aws ec2 start-instances --instance-ids i-1",
+            "aws kms cancel-key-deletion --key-id k",
+        )
+        for cmd in blocked:
+            with self.subTest(block=cmd):
+                self.assertBlocked(r.run(cmd), "No COUNCIL_ACK")
+
     def test_a_committed_fresh_linted_ack_passes(self):
         self.assertAllowed(self.fresh().run(f"COUNCIL_ACK={RECORD} {RAW_AWS}"))
 
