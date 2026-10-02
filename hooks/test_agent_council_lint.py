@@ -462,6 +462,121 @@ class TestSourcePinning(unittest.TestCase):
         self.assertEqual((code, rules), (1, {"A4"}))
         self.assertTrue(any("symlink" in line for line in out), out)
 
+    def test_readme_and_underscore_agents_must_be_pinned_too(self):
+        # Claude Code may load them; a pin that skips them is a hole.
+        for name in ("README.md", "_hidden.md"):
+            with self.subTest(name=name):
+                r = self.repo()
+                (r.root / ".claude" / "agents" / name).write_text(AGENT)
+                code, rules, out = r.lint()
+                self.assertEqual((code, rules), (1, {"A4"}))
+                self.assertTrue(
+                    any(name in line and "not pinned" in line for line in out), out
+                )
+
+    def test_a_path_too_long_is_an_error_not_a_crash(self):
+        r = self.repo(
+            lock_lines=[
+                lambda d: (
+                    f"{d('.claude/agents/reviewer.md')}  .claude/agents/reviewer.md"
+                ),
+                "0" * 64 + "  " + "x" * 300 + ".md",
+            ]
+        )
+        code, rules, _ = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+
+    def test_a_listed_file_twice_is_a4(self):
+        def line(d):
+            return f"{d('.claude/agents/reviewer.md')}  .claude/agents/reviewer.md"
+
+        code, rules, out = self.repo(lock_lines=[line, line]).lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(any("more than once" in x for x in out), out)
+
+    def test_a_directory_entry_is_a4(self):
+        r = self.repo(
+            lock_lines=[
+                lambda d: (
+                    f"{d('.claude/agents/reviewer.md')}  .claude/agents/reviewer.md"
+                ),
+                "0" * 64 + "  .claude/agents",
+            ]
+        )
+        code, rules, out = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(any("not a regular file" in x for x in out), out)
+
+    def test_a_symlinked_parent_directory_outside_the_repo_is_a4(self):
+        import hashlib
+
+        r = self.repo()
+        outside = pathlib.Path(tempfile.mkdtemp())
+        (outside / "x.md").write_text("outside\n")
+        (r.root / "prompts").symlink_to(outside, target_is_directory=True)
+        digest = hashlib.sha256(b"outside\n").hexdigest()
+        with open(r.root / self.LOCK, "a") as fh:
+            fh.write(f"{digest}  prompts/x.md\n")
+        code, rules, out = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(any("outside the repo" in x for x in out), out)
+
+    def test_an_unusable_lock_file_is_a4_with_its_reason(self):
+        cases = {
+            "symlink": "regular file",
+            "oversize": "exceeds",
+            "not utf-8": "not valid UTF-8",
+        }
+        for case, needle in cases.items():
+            with self.subTest(case=case):
+                r = self.repo()
+                lock = r.root / self.LOCK
+                if case == "symlink":
+                    target = pathlib.Path(tempfile.mkdtemp()) / "lock"
+                    target.write_bytes(lock.read_bytes())
+                    lock.unlink()
+                    lock.symlink_to(target)
+                elif case == "oversize":
+                    lock.write_bytes(lock.read_bytes() + b"#" * (acl.MAX_BYTES + 1))
+                else:
+                    lock.write_bytes(b"\xff\xfe" + lock.read_bytes())
+                code, rules, out = r.lint()
+                self.assertEqual((code, rules), (1, {"A4"}))
+                self.assertTrue(any(needle in x for x in out), out)
+
+    def test_an_oversize_pinned_file_is_a4(self):
+        import hashlib
+
+        big = b"x" * (acl.MAX_PINNED_BYTES + 1)
+        r = self.repo()
+        (r.root / "big.md").write_bytes(big)
+        with open(r.root / self.LOCK, "a") as fh:
+            fh.write(f"{hashlib.sha256(big).hexdigest()}  big.md\n")
+        code, rules, out = r.lint()
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(any("exceeds" in x for x in out), out)
+
+    def test_lock_line_endings_and_bom(self):
+        for name, mangle in {
+            "lone CR": lambda b: b.replace(b"\n", b"\r"),
+            "BOM": lambda b: b"\xef\xbb\xbf" + b,
+        }.items():
+            with self.subTest(case=name):
+                r = self.repo(extra={"prompts/a.md": "a\n"})
+                lock = r.root / self.LOCK
+                lock.write_bytes(mangle(lock.read_bytes()))
+                self.assertEqual(r.lint()[:2], (0, set()))
+
+    def test_require_lock_fails_when_the_lock_is_absent(self):
+        code, rules, out = Repo({"reviewer.md": AGENT}, None).lint("--require-lock")
+        self.assertEqual((code, rules), (1, {"A4"}))
+        self.assertTrue(any("--require-lock" in x for x in out), out)
+
+    def test_a_colon_in_a_filename_cannot_break_the_line_format(self):
+        r = Repo({"we:ird.md": "no frontmatter\n"}, None)
+        code, rules, out = r.lint()
+        self.assertEqual((code, rules), (1, {"A1"}))
+
     def test_sha256sum_variants_are_accepted(self):
         # binary-mode marker, ./ prefix, uppercase hex, CRLF line endings
         r = self.repo(
@@ -472,6 +587,31 @@ class TestSourcePinning(unittest.TestCase):
             ]
         )
         self.assertEqual(r.lint()[:2], (0, set()))
+
+
+class TestAgentTreeShape(unittest.TestCase):
+    """A5: agents Claude Code could load but the lint would never enumerate."""
+
+    def test_a_symlink_under_the_agents_dir_is_a5(self):
+        r = Repo({"reviewer.md": AGENT}, None)
+        outside = pathlib.Path(tempfile.mkdtemp())
+        (outside / "evil.md").write_text(AGENT.replace("model: sonnet", "model: gpt-5"))
+        (r.root / ".claude" / "agents" / "sub").symlink_to(
+            outside, target_is_directory=True
+        )
+        self.assertEqual(r.lint()[:2], (1, {"A5"}))
+
+    def test_a_case_variant_agents_directory_is_a5(self):
+        r = Repo({"reviewer.md": AGENT}, None)
+        variant = r.root / ".claude" / "Agents"
+        try:
+            variant.mkdir()
+        except FileExistsError:
+            self.skipTest(
+                "case-insensitive filesystem: the variant is the same directory"
+            )
+        (variant / "evil.md").write_text(AGENT)
+        self.assertEqual(r.lint()[:2], (1, {"A5"}))
 
 
 class TestZeroAndContract(unittest.TestCase):

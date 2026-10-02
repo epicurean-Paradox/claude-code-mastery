@@ -94,7 +94,7 @@ def run_evidence(data):
 
 
 COUNCIL_RULES = (
-    {f"A{i}" for i in range(1, 5)} | {f"C{i}" for i in range(1, 10)} | {"ZERO"}
+    {f"A{i}" for i in range(1, 6)} | {f"C{i}" for i in range(1, 10)} | {"ZERO"}
 )
 
 
