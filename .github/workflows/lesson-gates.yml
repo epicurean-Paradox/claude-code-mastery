@@ -363,6 +363,12 @@ jobs:
         run: |
           python3 -m py_compile hooks/agent-council-lint.py
           python3 -m unittest discover -s hooks -p 'test_*.py' -v
+          # The CLI as an adopter runs it. This repo has no agents or councils, so it
+          # needs --allow-empty -- and must fail without it (the ZERO rule).
+          python3 hooks/agent-council-lint.py --allow-empty .
+          if python3 hooks/agent-council-lint.py . 2>/dev/null; then
+            echo "::error::agent-council-lint passed an empty tree without --allow-empty"; exit 1
+          fi
 
   fuzz-bounded:
     # 40 s of coverage-guided fuzzing per gate parser on every push and PR. A crash or a

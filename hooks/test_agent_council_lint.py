@@ -141,11 +141,11 @@ class TestAgentRules(unittest.TestCase):
             with self.subTest(case=name):
                 code, rules, _ = lint({"a.md": text}, None)
                 self.assertEqual(code, 1)
-                self.assertTrue(rules <= {"A1", "A3"}, rules)
+                self.assertTrue(rules <= {"A1", "A2", "A3"}, rules)
 
-    def test_an_alias_is_refused_even_when_it_expands_to_a_valid_model(self):
+    def test_an_alias_on_the_model_line_is_refused(self):
         code, rules, _ = lint({"a.md": "---\nm: &a sonnet\nmodel: *a\n---\n"}, None)
-        self.assertEqual((code, rules), (1, {"A1"}))
+        self.assertEqual((code, rules), (1, {"A3"}))
 
 
 class TestCouncilRules(unittest.TestCase):
@@ -214,6 +214,124 @@ class TestCouncilRules(unittest.TestCase):
                 code, rules, _ = lint(None, {COUNCIL_NAME: text})
                 self.assertEqual(code, 1)
                 self.assertTrue(rules, "an error must be reported")
+
+
+class TestReviewFindings(unittest.TestCase):
+    """Shapes found in review of the first cut, each seen red before its fix."""
+
+    def test_crlf_council_lints_clean(self):
+        code, _, lines = lint(None, {COUNCIL_NAME: council().replace("\n", "\r\n")})
+        self.assertEqual((code, lines), (0, []))
+
+    def test_byte_order_mark_is_not_a_missing_frontmatter(self):
+        bom = "\ufeff"
+        code, _, lines = lint({"a.md": bom + AGENT}, {COUNCIL_NAME: bom + council()})
+        self.assertEqual((code, lines), (0, []))
+
+    def test_agent_fields_claude_code_tolerates_do_not_fail_the_lint(self):
+        # an unquoted ": " in description is invalid strict YAML but a working agent file
+        text = AGENT.replace("Reviews a diff.", "Use when: reviewing a diff")
+        self.assertEqual(lint({"a.md": text}, None)[:2], (0, set()))
+
+    def test_an_inline_comment_on_the_model_line_is_a3(self):
+        # recorded breaking agent launch: the comment is read as part of the model name
+        text = AGENT.replace("model: sonnet", "model: inherit  # explicit")
+        self.assertEqual(lint({"a.md": text}, None)[:2], (1, {"A3"}))
+
+    def test_a_model_declared_twice_is_a3(self):
+        # two valid values: only the duplicate check can catch it
+        text = AGENT.replace("model: sonnet", "model: sonnet\nmodel: opus")
+        self.assertEqual(lint({"a.md": text}, None)[:2], (1, {"A3"}))
+
+    def test_anthropic_model_forms_are_accepted(self):
+        for model in (
+            "sonnet[1m]",
+            "opusplan",
+            "fable",
+            '"claude-opus-5"',
+            "anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "claude-sonnet-4-5@20250929",
+        ):
+            with self.subTest(model=model):
+                text = AGENT.replace("model: sonnet", f"model: {model}")
+                self.assertEqual(lint({"a.md": text}, None)[:2], (0, set()))
+
+    def test_a_trailing_escape_or_non_claude_model_is_a3(self):
+        for model in ('"claude-opus-5\\n"', "claude-opus-5 extra", "gemini-2.5-pro"):
+            with self.subTest(model=model):
+                text = AGENT.replace("model: sonnet", f"model: {model}")
+                self.assertEqual(lint({"a.md": text}, None)[:2], (1, {"A3"}))
+
+    def test_family_prefixes_need_a_boundary(self):
+        cases = {
+            "o3rd-party-thing": None,
+            "o10": "openai",
+            "o3-mini": "openai",
+            "llamaindex-agent": None,
+            "llama-3.3-70b": "meta",
+            "mixtral-8x7b": "mistral",
+            "devstral-small": "mistral",
+            "deepseek-r1": "deepseek",
+            "google/gemini-2.5-pro": "google",
+            "models/gemini-2.5-pro": "google",
+            "openai/gpt-oss-120b": "openai",
+            "au.anthropic.claude-sonnet-4-5": "anthropic",
+            "grok-4": None,
+        }
+        for model, family in cases.items():
+            with self.subTest(model=model):
+                self.assertEqual(acl.model_family(model), family)
+
+    def test_dissent_sections_cannot_be_satisfied_vacuously(self):
+        fenced = "\n```md\n## Disagreements\nx\n\n## Rejected\ny\n```\n"
+        bodies = {
+            "only inside a code fence": fenced,
+            "only subheadings": "\n## Disagreements\n### Security\n\n## Rejected\n### Cost\n",
+            "placeholder": "\n## Disagreements\nTODO\n\n## Rejected\nNone.\n",
+            "html comment": "\n## Disagreements\n<!-- later -->\n\n## Rejected\nx y\n",
+            "zero-width": "\n## Disagreements\n\u200b\n\n## Rejected\nx y\n",
+            "duplicate heading": COUNCIL_BODY + "\n## Disagreements\nmore\n",
+        }
+        for name, body in bodies.items():
+            with self.subTest(case=name):
+                code, rules, _ = lint(None, {COUNCIL_NAME: council(body=body)})
+                self.assertEqual((code, rules), (1, {"C9"}))
+
+    def test_required_fields_must_be_filled_and_dates_real(self):
+        code, rules, _ = lint(None, {COUNCIL_NAME: council({"topic": "null"})})
+        self.assertEqual((code, rules), (1, {"C2"}))
+        bad_day = council({"date": "2026-02-30"})
+        code, rules, _ = lint(None, {"2026-02-30-vpc.md": bad_day})
+        self.assertEqual(code, 1)
+        self.assertIn("C1", rules)
+
+    def test_a_reason_does_not_waive_c7_when_two_families_are_present(self):
+        meta = {"refuter": "iac-delivery", "single_family_reason": '"n/a"'}
+        self.assertEqual(lint(None, {COUNCIL_NAME: council(meta)})[:2], (1, {"C7"}))
+
+    def test_duplicate_lens_names_are_c4(self):
+        lenses = (
+            COUNCIL_META["lenses"]
+            + "\n  - {lens: security-iam, model: claude-opus-5-5}"
+        )
+        self.assertEqual(
+            lint(None, {COUNCIL_NAME: council({"lenses": lenses})})[:2], (1, {"C4"})
+        )
+
+    def test_nested_councils_are_linted_and_readmes_skipped(self):
+        repo = Repo(
+            {"README.md": "# agents\n", "_template.md": "x"},
+            {
+                "infra/2026-10-02-vpc.md": council().replace(
+                    "2026-10-02", "2026-10-01", 1
+                ),
+                "README.md": "# councils\n",
+                "_template.md": "x",
+            },
+        )
+        code, rules, lines = repo.lint()
+        self.assertEqual((code, rules), (1, {"C3"}), lines)
 
 
 class TestZeroAndContract(unittest.TestCase):

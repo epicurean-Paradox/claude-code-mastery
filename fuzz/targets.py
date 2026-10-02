@@ -12,6 +12,7 @@ coverage-guided driver is fuzz/fuzz.py.
 import contextlib
 import importlib.util
 import io
+import shutil
 import sys
 import tempfile
 from datetime import date
@@ -100,9 +101,13 @@ COUNCIL_RULES = (
 def run_council(data):
     """agent-council-lint over a throwaway repo holding one file: an agent definition when
     the first byte is even, a council record when it is odd; the rest is the file. Returns
-    (exit code, set of rule tags reported)."""
+    (exit code, set of rule tags reported). The filename and the single file are fixed, so
+    C1 and ZERO are covered by the unit tests, not by this target."""
     kind, body = (data[0] % 2, data[1:]) if data else (0, b"")
-    root = Path(tempfile.mkdtemp(dir=_TMP))
+    root = _TMP / "council-repo"
+    shutil.rmtree(
+        root, ignore_errors=True
+    )  # one tree, rebuilt per input: no inode leak
     target = (
         root / ".claude" / "agents" / "fuzz.md"
         if kind == 0

@@ -66,7 +66,7 @@ EXPECTED = {
         "valid-agent": (0, set()),
         "valid-council": (0, set()),
         "agent-no-model": (1, {"A2"}),
-        "agent-alias": (1, {"A1"}),
+        "agent-alias": (1, {"A3"}),  # the model line holds *a, not a model
         "council-single-family-no-reason": (1, {"C6", "C7"}),
         "council-refuter-same-family": (1, {"C7"}),
         "council-no-dissent": (1, {"C9"}),
