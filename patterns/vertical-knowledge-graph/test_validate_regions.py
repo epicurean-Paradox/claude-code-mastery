@@ -7,7 +7,6 @@ rubber-stamps (returns no errors) lets an aspirational region ship as 'observed'
 fact — the exact failure the truth protocol exists to block.
 """
 
-import copy
 import io
 import pathlib
 import subprocess
