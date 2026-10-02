@@ -2,7 +2,8 @@
 
 Every committed seed runs through the same target function the coverage-guided driver uses,
 so what the fuzzer found stays found. Each seed pins its outcome: the exit code for the two
-CLIs (plus the reason, for the ledger lint), the flag count for evidence-audit. Runs without
+CLIs (plus the reason, for the ledger lint; the rule tags, for the council lint), the flag
+count for evidence-audit. Runs without
 atheris.
 
 Wrong behaviour this catches: a parser that crashes, breaks its output contract, or changes
@@ -59,6 +60,16 @@ EXPECTED = {
         "shape-tool-input-list": 0,
         "shape-tool-command-int": 0,
         "shape-tool-name-list": 1,
+    },
+    # (exit code, rule tags) of agent-council-lint; first byte even = agent, odd = council
+    "council": {
+        "valid-agent": (0, set()),
+        "valid-council": (0, set()),
+        "agent-no-model": (1, {"A2"}),
+        "agent-alias": (1, {"A3"}),  # the model line holds *a, not a model
+        "council-single-family-no-reason": (1, {"C6", "C7"}),
+        "council-refuter-same-family": (1, {"C7"}),
+        "council-no-dissent": (1, {"C9"}),
     },
 }
 

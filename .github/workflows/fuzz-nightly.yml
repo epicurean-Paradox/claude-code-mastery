@@ -1,11 +1,12 @@
 name: fuzz-nightly
 
-# Deep fuzz run over the three gate parsers; not a merge gate (fuzz-bounded in
+# Deep fuzz run over the four gate parsers; not a merge gate (fuzz-bounded in
 # lesson-gates.yml is). Stop primitives, declared per the Loop Launch Gate and
 # enforced by the YAML below:
 # - iteration cap: the schedule expires on FUZZ_NIGHTLY_UNTIL (~180 nights); after it
 #   every run fails at its first step until the date is renewed or this file deleted.
-#   Within a night: one run, no retry, -max_total_time=1200 per target, timeout-minutes 75
+#   Within a night: one run, no retry, -max_total_time=900 for each of 4 targets
+#   (60 min), inside timeout-minutes 75
 # - budget cap: at most 75 GitHub Actions minutes per night (standard runners are free
 #   for public repositories, so the cap is runtime, not spend)
 # - escalation: a failed scheduled run notifies the user who last changed this file's
@@ -49,16 +50,16 @@ jobs:
           path: fuzz-out/*-work
           key: fuzz-nightly-corpus-${{ github.run_id }}
           restore-keys: fuzz-nightly-corpus-
-      - name: fuzz regions, ledger, evidence (20 min each)
+      - name: fuzz regions, ledger, evidence, council (15 min each)
         run: |
           shopt -s nullglob
           fail=0
-          for t in regions ledger evidence; do
+          for t in regions ledger evidence council; do
             seeds=("fuzz/corpus/$t")
             if [ "$t" = evidence ]; then seeds+=(hooks/test-fixtures); fi
             mkdir -p "fuzz-out/$t-work"
             python fuzz/fuzz.py "$t" "fuzz-out/$t-work" "${seeds[@]}" \
-              -max_total_time=1200 -timeout=10 -max_len=65536 -rss_limit_mb=2048 \
+              -max_total_time=900 -timeout=10 -max_len=65536 -rss_limit_mb=2048 \
               -artifact_prefix="fuzz-out/$t-" 2>&1 | tee "fuzz-out/$t.log" | tail -3 || true
             echo "$t final coverage: $(grep -oE 'cov: [0-9]+' "fuzz-out/$t.log" | tail -1)"
             if ! grep -qE '^Done [1-9][0-9]* runs' "fuzz-out/$t.log"; then

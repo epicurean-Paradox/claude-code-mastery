@@ -243,7 +243,7 @@ No infrastructure deployment goes through without a multi-agent council review r
 
 - **Four lenses minimum, each an independent agent, none of them the author**: reliability / observability (what failure is NOT alarmed?), security / IAM blast radius, IaC architecture and delivery (drift, reproducibility, CI-vs-local), cost / operational burden.
 - **Span model families.** At least one lens, including the one assigned to refute the others (see Adversarial verify), on a different model family from the author where the harness offers one; the record names each lens's model, and says so when only one family was available. Same-model lenses are likely to share blind spots: inferred from published results, not yet observed in a council (LESSONS Lesson 30).
-- **The verdict is a committed file**, `docs/council/<YYYY-MM-DD>-<topic>.md`. A conversation is not a record: it cannot be reviewed by the person who inherits the system.
+- **The verdict is a committed file**, `docs/council/<YYYY-MM-DD>-<topic>.md`. A conversation is not a record: it cannot be reviewed by the person who inherits the system. Its YAML frontmatter names `topic`, `date`, `author_model`, `refuter`, `lenses` (`{lens, model}` each, the four above by name), `verdict` and, when every lens shares one family, `single_family_reason`; the body has `## Disagreements` and `## Rejected` sections with real text ("None", "TODO" or a sub-heading alone does not count). `hooks/agent-council-lint.py` checks all of it in CI.
 - **It must POST-DATE the infra it approves.** The hook compares committed timestamps of `infra/` against `docs/council/`, so a stale council fails closed. A verdict that predates its subject reviewed something else.
 - **Record the disagreements and what was rejected**, not only what passed. A council record with no dissent is a rubber stamp and reads as one later.
 - Read-only work is never gated: `plan`, `validate`, `fmt`, `init`, `show`, and every read-only cloud API call. Verify as much as you like before convening.
@@ -257,7 +257,7 @@ No infrastructure deployment goes through without a multi-agent council review r
 
 ## Subagent Model Routing
 
-- Every named subagent declares `model:` explicitly — un-set = inherit = parent rates; treat an un-routed subagent as a defect. `inherit` is legitimate, but written down.
+- Every named subagent declares `model:` explicitly — un-set = inherit = parent rates; treat an un-routed subagent as a defect. `inherit` is legitimate, but written down. `hooks/agent-council-lint.py` fails CI on a `.claude/agents/*.md` without it, or with anything after the value on the `model:` line (an inline comment is read as part of the model name).
 - Forks cannot be cheapened (always the parent's model; their discount is the shared prompt cache). A skill's `context: fork` is the opposite mechanism (isolated, routable via its `agent:`) — do not conflate them.
 - Route by ambiguity, not task size: top tier for judgment, mid tier for codegen/exploration, bottom tier for lookups only. Any fan-out states agent count x model tier next to its coverage statement.
 
