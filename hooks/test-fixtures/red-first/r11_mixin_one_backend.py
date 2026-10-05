@@ -1,5 +1,6 @@
 # Contract mixin over two backends; the PR fixes the fast backend. The new contract test is
-# red on the base through TestFast, green through TestSlow. The base keeps the MOST passing.
+# red on the base through TestFast, green through TestSlow. Found when the base kept the
+# MOST passing run; now it is red if any existing runner is red.
 HDR = """\
 import pathlib, sys, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))

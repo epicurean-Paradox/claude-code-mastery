@@ -1,6 +1,6 @@
 # Honest red-first API-surface tests: the PR adds lib.mul and lib.Registry entry. On the real
-# base the import fails (red). The stub is not None, is callable, and is set ON lib, so these
-# pass on the base.
+# base the import fails (red). Found when the stub was set ON lib and these passed on the
+# base; now lib is untouched and a test that names the stub counts as an error.
 HDR = """\
 import pathlib, sys, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))

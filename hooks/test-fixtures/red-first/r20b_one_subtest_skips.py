@@ -1,5 +1,6 @@
 # Honest red-first subTest table where ONE case is platform-only and skips on the runner.
-# At HEAD the other cases pass; the driver records "not collected" (no pin can excuse it).
+# At HEAD the other cases pass. Found when the driver recorded "not collected" (no pin
+# could excuse it); now a skipped row maps to its test.
 HDR = """\
 import pathlib, sys, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))

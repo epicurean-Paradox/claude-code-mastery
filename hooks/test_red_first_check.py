@@ -185,7 +185,7 @@ class TestRedFirstCheck(unittest.TestCase):
         self.assertIn("tests/test_more.py:RED-FIRST:TestMore.test_green", out)
         self.assertNotIn("RED-FIRST:TestMore.test_red", out)
 
-    def test_a_test_whose_module_cannot_load_on_the_base_counts_as_red(self):
+    def test_a_module_the_pr_adds_is_stubbed_on_the_base(self):
         r = Repo()
         self.addCleanup(r.close)
         r.write("newmod.py", "VALUE = 1\n")
@@ -196,7 +196,24 @@ class TestRedFirstCheck(unittest.TestCase):
         r.commit("new module")
         code, out = r.check()
         self.assertEqual(code, 0, out)
-        self.assertIn("module did not load", out)
+        self.assertIn("error on base (missing on base: newmod.VALUE)", out)
+
+    def test_a_module_that_cannot_load_on_the_base_counts_as_red(self):
+        # An error no stub can fix: the module asserts on the base's code at import.
+        r = Repo()
+        self.addCleanup(r.close)
+        r.write("lib.py", LIB_FIXED)
+        r.write(
+            "tests/test_lib.py",
+            HEADER
+            + "assert add(2, 3) == 5\n"
+            + EXISTING
+            + "\n    def test_adds(self):\n        self.assertEqual(add(2, 3), 5)\n",
+        )
+        r.commit("assert at import")
+        code, out = r.check()
+        self.assertEqual(code, 0, out)
+        self.assertIn("error on base (module did not load: AssertionError)", out)
 
     def test_the_check_runs_the_named_test_only(self):
         # test_sum passes on the base (unmarked: a violation). A red near-namesake must not
@@ -905,6 +922,38 @@ class TestDriverEdges(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("RED-FIRST:TestDouble.test_two is green on base", out)
 
+    def test_a_generated_module_the_code_uses_is_copied_into_the_base(self):
+        # pkg/_speedups.py is gitignored (built); core uses it, so a stub would make it red.
+        code, out = self.run_scenario(
+            {
+                ".gitignore": "pkg/_speedups.py\n",
+                "pkg/__init__.py": "",
+                "pkg/_speedups.py": "def fast_add(a, b):\n    return a + b\n",
+                "pkg/core.py": "from ._speedups import fast_add\n\n\ndef add(a, b):\n    return fast_add(a, b)\n",
+            },
+            {
+                "tests/test_core.py": "import unittest\nfrom pkg.core import add\n\n\nclass TestCore(unittest.TestCase):\n    def test_adds(self):\n        self.assertEqual(add(2, 3), 5)\n",
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestCore.test_adds is green on base", out)
+
+    def test_a_broken_import_the_pr_fixes_stays_red_on_the_base(self):
+        # The base's lib imports a name compat never had: only names HEAD defines are stubbed.
+        code, out = self.run_scenario(
+            {
+                "compat.py": "OLD = 1\n",
+                "lib.py": "from compat import RENAMED\n\n\ndef add(a, b):\n    return a + b\n",
+            },
+            {
+                "lib.py": LIB_FIXED,
+                "tests/test_lib.py": LIB_HEADER
+                + "\nclass TestFixed(unittest.TestCase):\n    def test_adds(self):\n        self.assertEqual(lib.add(2, 3), 5)\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("error on base (module did not load: ImportError)", out)
+
     def test_a_stub_used_through_a_helper_raises_once_tests_run(self):
         code, out = self.run_scenario(
             {},
@@ -917,16 +966,18 @@ class TestDriverEdges(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("TestMul.test_mul: error on base (missing on base: lib.mul)", out)
 
-    def test_a_subclass_file_that_cannot_load_on_the_base_counts_as_red(self):
+    def backends(self, line):
+        """A contract mixin whose only runner, in another file, runs `line` at import."""
         contract = "\nclass Contract:\n    def test_adds(self):\n        self.assertEqual(self.impl(2, 3), 5)\n"
         backends = (
             "import pathlib, sys, unittest\n"
             "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))\n"
             "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
-            "from lib import add_v2\nfrom test_contract import Contract\n"
-            "\n\nclass TestV2(Contract, unittest.TestCase):\n    impl = staticmethod(add_v2)\n"
+            "import lib\nfrom lib import add_v2\nfrom test_contract import Contract\n"
+            + line
+            + "\n\nclass TestV2(Contract, unittest.TestCase):\n    impl = staticmethod(add_v2)\n"
         )
-        code, out = self.run_scenario(
+        return self.run_scenario(
             {},
             {
                 "lib.py": LIB_FIXED + "\nadd_v2 = add\n",
@@ -934,9 +985,19 @@ class TestDriverEdges(unittest.TestCase):
                 "tests/test_backends.py": backends,
             },
         )
+
+    def test_a_runner_file_that_needs_a_new_name_still_runs_the_test(self):
+        code, out = self.backends("")
         self.assertEqual(code, 0, out)
         self.assertIn(
-            "Contract.test_adds: error on base (tests/test_backends.py: module did not load",
+            "Contract.test_adds: error on base (missing on base: lib.add_v2)", out
+        )
+
+    def test_a_runner_file_that_cannot_load_on_the_base_counts_as_red(self):
+        code, out = self.backends("assert lib.add(2, 3) == 5\n")
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "Contract.test_adds: error on base (tests/test_backends.py: module did not load: AssertionError",
             out,
         )
 
