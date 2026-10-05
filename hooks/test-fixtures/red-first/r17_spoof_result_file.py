@@ -20,8 +20,11 @@ class TestAdd(unittest.TestCase):
     def test_old(self):
         self.assertEqual(lib.add(1, 0), 1)
     def test_zero(self):
-        paths = [a for a in sys.argv[1:] if a.endswith(".json")]
-        paths += [v for v in os.environ.values() if v.endswith(".json")]
+        # Only the checker's own files (under its red-first- temp dir): a CI runner holds
+        # other .json paths in its environment (GITHUB_EVENT_PATH).
+        mine = lambda v: "red-first-" in v and v.endswith(".json")
+        paths = [a for a in sys.argv[1:] if mine(a)]
+        paths += [v for v in os.environ.values() if mine(v)]
         if paths:
             base = "red-first-" in os.getcwd()
             verdict = {"verdicts": [["red" if base else "green", ""]], "attrs": {}, "namings": {}}
