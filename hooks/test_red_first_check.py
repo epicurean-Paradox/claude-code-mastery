@@ -9,6 +9,7 @@ decide reporting success.
 
 import os
 import pathlib
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,7 @@ import textwrap
 import unittest
 
 CHECK = pathlib.Path(__file__).resolve().parent / "red-first-check.py"
+CORPUS = pathlib.Path(__file__).resolve().parent / "test-fixtures" / "red-first"
 
 LIB_BUGGY = "def add(a, b):\n    return a - b  # the bug\n"
 LIB_FIXED = "def add(a, b):\n    return a + b\n"
@@ -37,13 +39,15 @@ EXISTING = textwrap.dedent(
 
 
 class Repo:
-    def __init__(self):
+    def __init__(self, seed=True, dirname=""):
         self._tmp = tempfile.TemporaryDirectory()
-        self.root = pathlib.Path(self._tmp.name).resolve()
+        self.root = pathlib.Path(self._tmp.name).resolve() / dirname
+        self.root.mkdir(exist_ok=True)
         self.git("init", "-q")
-        self.write("lib.py", LIB_BUGGY)
-        self.write("tests/test_lib.py", HEADER + EXISTING)
-        self.base = self.commit("base")
+        if seed:
+            self.write("lib.py", LIB_BUGGY)
+            self.write("tests/test_lib.py", HEADER + EXISTING)
+            self.base = self.commit("base")
 
     def git(self, *args):
         env = dict(
@@ -467,21 +471,23 @@ LIB_HEADER = textwrap.dedent(
 )
 
 
-def scenario(base, pr):
+def scenario(base, pr, seed=True, dirname=""):
     """A repo whose base commit holds `base` and whose PR commit applies `pr`.
 
-    Each maps a path to its text, None (delete) or ("symlink", target).
+    Each maps a path to its text, None (delete) or ("symlink", target). With seed=False
+    the repo starts empty instead of holding lib.py and tests/test_lib.py.
     """
-    r = Repo()
+    r = Repo(seed=seed, dirname=dirname)
     for files, message in ((base, "base"), (pr, "pr")):
         for rel, text in files.items():
             p = r.root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
             if p.is_symlink() or p.exists():
                 p.unlink()
             if isinstance(text, tuple):
                 p.symlink_to(text[1])
             elif text is not None:
-                r.write(rel, text)
+                r.write(rel, textwrap.dedent(text))
         r.git("add", "-A")
         r.git("commit", "-q", "--allow-empty", "-m", message)
     r.base = r.git("rev-parse", "HEAD~1")
@@ -745,7 +751,8 @@ class TestDriverEdges(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("does not pass at HEAD (error: tearDownClass", out)
 
-    def test_a_mixin_test_green_through_any_of_its_testcases_is_green(self):
+    def test_a_mixin_test_red_through_any_of_its_testcases_is_red(self):
+        # Red through TestTwo, green through TestZero: it sees the defect through one.
         code, out = self.run_scenario(
             {},
             {
@@ -756,8 +763,8 @@ class TestDriverEdges(unittest.TestCase):
                 + "\n\nclass TestTwo(Doubles, unittest.TestCase):\n    x = 2\n",
             },
         )
-        self.assertEqual(code, 1, out)
-        self.assertIn("RED-FIRST:Doubles.test_double is green on base", out)
+        self.assertEqual(code, 0, out)
+        self.assertIn("Doubles.test_double: red on base", out)
 
     def test_a_run_that_exits_without_a_result_does_not_pass(self):
         code, out = self.run_scenario(
@@ -822,6 +829,142 @@ class TestDriverEdges(unittest.TestCase):
         )
         self.assertEqual(code, 1, out)
         self.assertIn("does not pass at HEAD (error: module did not load", out)
+
+    def guarded(self, handler, head_has_fast):
+        """A test of parse that imports fast_parse with a fallback; green on the base."""
+        compat = "def parse(s):\n    return s.strip()\n"
+        fast = "\ndef fast_parse(s):\n    return s.strip()\n" if head_has_fast else ""
+        return self.run_scenario(
+            {"compat.py": compat},
+            {
+                "compat.py": compat + fast,
+                "tests/test_parse.py": LIB_HEADER
+                + "IMPORT_ERRORS = (ImportError,)\n"
+                + f"try:\n    from compat import fast_parse as parse\nexcept {handler}:\n    from compat import parse\n"
+                + "\n\nclass TestParse(unittest.TestCase):\n    def test_tabs(self):\n        self.assertEqual(parse('\\ta\\t'), 'a')\n",
+            },
+        )
+
+    def test_a_guarded_import_keeps_its_fallback_on_the_base(self):
+        code, out = self.guarded("ImportError", head_has_fast=True)
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestParse.test_tabs is green on base", out)
+
+    def test_a_name_head_lacks_is_not_stubbed_behind_any_handler(self):
+        # A handler the guard cannot read (a tuple variable): only HEAD's names are stubbed.
+        code, out = self.guarded("IMPORT_ERRORS", head_has_fast=False)
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestParse.test_tabs is green on base", out)
+
+    def test_a_new_test_package_outside_tests_gets_its_init_on_the_base(self):
+        # pkg/checks/ is not a test-support directory: only the __init__ chain copies it.
+        test = "import unittest\nfrom ..core import add\n\n\nclass TestCore(unittest.TestCase):\n    def test_zero(self):\n        self.assertEqual(add(0, 0), 0)\n"
+        code, out = self.run_scenario(
+            {"pkg/__init__.py": "", "pkg/core.py": LIB_BUGGY},
+            {"pkg/checks/__init__.py": "", "pkg/checks/test_core.py": test},
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestCore.test_zero is green on base", out)
+
+    def test_one_gone_test_never_pairs_with_two_new_ones(self):
+        zero = "\n    def %s(self):\n        self.assertEqual(add(0, 0), 0)\n"
+        code, out = self.run_scenario(
+            {"tests/test_lib.py": HEADER + EXISTING + zero % "test_old"},
+            {
+                "tests/test_lib.py": HEADER
+                + EXISTING
+                + zero % "test_a"
+                + zero % "test_b"
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestAdd.test_a is green on base", out)
+        self.assertIn("RED-FIRST:TestAdd.test_b is green on base", out)
+
+    def test_a_renamed_class_is_new(self):
+        # Fails closed: a class rename keeps every test, but the key holds the class name.
+        body = "(unittest.TestCase):\n    def test_zero(self):\n        self.assertEqual(add(0, 0), 0)\n"
+        code, out = self.run_scenario(
+            {"tests/test_lib.py": HEADER + "\nclass TestOld" + body},
+            {"tests/test_lib.py": HEADER + "\nclass TestNew" + body},
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestNew.test_zero is green on base", out)
+
+    def test_a_code_module_keeps_its_own_import_fallback(self):
+        # lib.py (unchanged) uses compat.fast when present; only HEAD's compat has it.
+        lib = "try:\n    from compat import fast\nexcept ImportError:\n    fast = None\n\n\ndef double(x):\n    return fast(x) if fast else x * 2\n"
+        code, out = self.run_scenario(
+            {"lib.py": lib, "compat.py": "SLOW = True\n"},
+            {
+                "compat.py": "SLOW = True\n\n\ndef fast(x):\n    return x * 2\n",
+                "tests/test_lib.py": LIB_HEADER
+                + "\nclass TestDouble(unittest.TestCase):\n    def test_two(self):\n        self.assertEqual(lib.double(2), 4)\n",
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestDouble.test_two is green on base", out)
+
+    def test_a_stub_used_through_a_helper_raises_once_tests_run(self):
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": LIB_FIXED + "\ndef mul(a, b):\n    return a * b\n",
+                "tests/test_lib.py": HEADER.replace("import add", "import add, mul")
+                + "\nclass TestMul(unittest.TestCase):\n    def product(self):\n        return mul(2, 3)\n\n    def test_mul(self):\n        self.assertEqual(self.product(), 6)\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("TestMul.test_mul: error on base (missing on base: lib.mul)", out)
+
+    def test_a_subclass_file_that_cannot_load_on_the_base_counts_as_red(self):
+        contract = "\nclass Contract:\n    def test_adds(self):\n        self.assertEqual(self.impl(2, 3), 5)\n"
+        backends = (
+            "import pathlib, sys, unittest\n"
+            "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))\n"
+            "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+            "from lib import add_v2\nfrom test_contract import Contract\n"
+            "\n\nclass TestV2(Contract, unittest.TestCase):\n    impl = staticmethod(add_v2)\n"
+        )
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": LIB_FIXED + "\nadd_v2 = add\n",
+                "tests/test_contract.py": LIB_HEADER + contract,
+                "tests/test_backends.py": backends,
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "Contract.test_adds: error on base (tests/test_backends.py: module did not load",
+            out,
+        )
+
+
+class TestReviewCorpus(unittest.TestCase):
+    """Every repro case from the reviews of this checker, replayed with its intended outcome.
+
+    One file per case in test-fixtures/red-first/: BASE and PR ({path: text, None or
+    ("symlink", target)}), EXIT, EXPECT and EXPECT_NOT, optionally DIRNAME. A case the
+    checker once got wrong stays wrong-proof here.
+    """
+
+    def test_every_review_case_has_its_intended_outcome(self):
+        cases = sorted(CORPUS.glob("*.py"))
+        self.assertGreaterEqual(len(cases), 46)
+        for case in cases:
+            ns = runpy.run_path(str(case))
+            with self.subTest(case.stem):
+                r = scenario(
+                    ns["BASE"], ns["PR"], seed=False, dirname=ns.get("DIRNAME", "")
+                )
+                self.addCleanup(r.close)
+                code, out = r.check()
+                self.assertEqual(code, ns["EXIT"], out)
+                for text in ns["EXPECT"]:
+                    self.assertIn(text, out)
+                for text in ns["EXPECT_NOT"]:
+                    self.assertNotIn(text, out)
 
 
 if __name__ == "__main__":
