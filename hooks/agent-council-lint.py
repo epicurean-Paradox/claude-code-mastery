@@ -240,7 +240,8 @@ def check_council(path, errors):
         return
     try:
         meta = yaml.load(frontmatter, Loader=_NoAliasLoader)
-    except (yaml.YAMLError, ValueError, RecursionError) as exc:
+    # OverflowError: a \U escape above the C int range, from PyYAML's chr() (Python 3.12)
+    except (yaml.YAMLError, ValueError, RecursionError, OverflowError) as exc:
         errors.append((path, "C2", f"frontmatter does not parse: {type(exc).__name__}"))
         return
     if not isinstance(meta, dict):
