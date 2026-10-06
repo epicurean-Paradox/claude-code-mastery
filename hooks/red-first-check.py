@@ -7,32 +7,38 @@ Finds the unittest test methods (`test*` in a class, nested classes and if/try/w
 included, in a `test_*.py` file) that exist at HEAD but not at the base. It parses both
 versions; a renamed file is compared with its source, and a symlinked base file is read
 through its link. A test that keeps its class, decorators, signature, body and context
-(the class's other members, the module's statements outside definitions, the definitions
-it uses, the package behind relative imports) under a new name or in another file is a
-rename, not new -- one gone test pairs with one new test, never with several. For each new
-test it:
+(the class's other members, the module statements it reaches, the package behind a
+relative import among them) under a new name or in another file is a rename, not new --
+one gone test pairs with one new test, never with several; a class renamed with the same
+heading and body is not new either. For each new test it:
 
   1. runs it at HEAD: it must pass -- a test that never passes proves nothing;
   2. runs it against the BASE's code: a throwaway worktree with the PR's test files, its
-     changed files under test-support directories, the `__init__.py` files the base lacks
-     and the gitignored modules the checkout has, minus the test files the PR deletes. It
-     must fail or error there -- a test that passes on the old code cannot see the defect
-     the change fixes.
+     changed files under test-support directories (`tests/`, `fixtures/`, ...; `test/`
+     when it holds test files), the `__init__.py` files the base lacks and the gitignored
+     modules the checkout holds (single files and packages in ignored directories, at
+     most 5000), minus the test and support files the PR deletes. It must fail or error
+     there -- a test that passes on the old code cannot see the defect the change fixes.
 
 Each run loads exactly that test in its own interpreter, imports its module as discovery
-would (package.module, else from the file's own directory, decided at HEAD), and records
-the test's own outcome apart from class and module fixtures. The test runs in every
-module-level TestCase that inherits the method unchanged, as discovery runs it, including
-subclasses in other test files (found by following inheritance through imports); with none
-it is not a test. On the base it counts as red if any runner is red, leaving out runner
+would (package.module, else from the file's own directory, decided per file at HEAD), and
+records the test's own outcome apart from class and module fixtures. The test runs in
+every module-level TestCase that inherits the method unchanged, as discovery runs it,
+including subclasses in other test files (any test file with a class whose base may be
+the same class by name); with none it is not a test -- unless such a file exists, which
+is a violation. On the base it counts as red if any runner is red, leaving out runner
 classes the PR adds while an older one exists.
 
-On the base the module is first imported as it is. When an ImportError or AttributeError
-escapes for a name HEAD defines in the repository (`from lib import new`, `lib.NEW`, a
-module the PR adds), that name is stubbed and the import retried, so one new name does not
-turn every test in the file red. A stub absorbs any use while modules import (a derived
-constant, a decorator, a base class) and raises once tests run; a test that names one
-directly, or a module global derived from one, counts as an error.
+On the base the test module runs one top-level statement at a time. When an ImportError
+or AttributeError escapes for a name HEAD defines in the repository (`from lib import new`,
+`lib.NEW`, a module the PR adds), that name -- with every other name HEAD's module has and
+the base's lacks -- is stubbed for the module it escaped from, and the import retried; a
+fallback import of any shape keeps working, and code under test never sees a stub. A
+statement that names a stub is skipped and a statement that still raises is stubbed; a
+stub absorbs any use while the module imports and raises once tests run. A test counts
+as an error when its class's heading or body, its decorators or defaults, or a module
+global it reaches (through its fixtures, `self.` helpers and module functions) depends on
+a stub or on a failed statement.
 
 The escape: a test that legitimately passes on the base (a mutant-killer, an over-strictness
 guard), or is skipped where the check runs, carries a COMMENT on its `def` line or in its body,
@@ -49,12 +55,13 @@ class or method does not exist at run time: a violation).
 
 Limits: a changed (not new) test is not re-checked; tests inherited by a new subclass and
 methods generated at runtime are not seen; a test whose behaviour depends on its own name
-can pass as a rename; subTest granularity is the whole test; a dependency the PR adds from
-outside the repository cannot load on the base, so every test importing it counts as red;
-changed files outside test-support directories stay at the base's version; an editable
-install that points at the HEAD checkout imports HEAD's code on the base; a test can always
-tell it runs in the base worktree; the runner is unittest. Exit 0 clean, 1 a violation,
-2 usage (unknown base, not a repo).
+can pass as a rename; subTest granularity is the whole test; changed files outside
+test-support directories stay at the base's version; a gitignored generated module is
+HEAD's build, so a fix in generated code is copied into the base too (pin such a test);
+a class body that touches a stub ties every test of that class to it; an editable install
+that points at the HEAD checkout imports HEAD's code on the base; a test can always tell
+it runs in the base worktree, and reach the driver; the runner is unittest. Exit 0 clean,
+1 a violation, 2 usage (unknown base, not a repo).
 """
 
 import ast
@@ -82,6 +89,16 @@ SUPPORT_DIRS = set(
     ).split(",")
 )
 GENERATED = (".py", ".pyi", ".so", ".pyd")  # gitignored modules the checkout may hold
+MAX_GENERATED = 5000
+SKIP_DIRS = {
+    "venv",
+    "env",
+    "node_modules",
+    "__pycache__",
+    "build",
+    "dist",
+    "site-packages",
+}
 BLOCKS = (ast.If, ast.Try, ast.With) + (
     (ast.TryStar,) if hasattr(ast, "TryStar") else ()
 )
@@ -114,7 +131,8 @@ NOTES = {
 # a function, so a test cannot reach the driver's state through __main__.
 DRIVER = r'''
 def driver():
-    import ast, builtins, importlib, json, os, re, symtable, sys, types, unittest, warnings
+    import __future__, ast, builtins, importlib, importlib.util, json, os, re, symtable
+    import sys, types, unittest, warnings
 
     out = open(os.environ.pop("RED_FIRST_OUT"), "w")
     with open(os.environ.pop("RED_FIRST_CONFIG")) as fh:
@@ -123,11 +141,20 @@ def driver():
     del sys.argv[1:]
     root = os.path.realpath(os.getcwd())
     sys.path[0] = root  # absolute, as under `python -m unittest`: survives a chdir
-    target_file = os.path.realpath(os.path.join(root, path))
+    code_file = os.path.join(root, path)
+    target_file = os.path.realpath(code_file)
     head_attrs = config.get("attrs", {})  # base: {module: {"names", "package"}} at HEAD
     namings = dict(config.get("namings", {}))
-    state = {"armed": False}
-    from_stubs, attr_stubs, module_stubs, patched = set(), set(), set(), []
+    state = {"armed": False, "module": None}
+    # Learned stubs, each scoped to the module whose import escaped: (importer, module, name)
+    # for a from-import or an attribute, (importer, module) for a module the base lacks.
+    from_stubs, attr_stubs, module_stubs = set(), set(), set()
+    patched, stub_cache, stub_modules = set(), {}, set()
+    touched = set()  # test-file lines running when a stub was used during imports
+    derived, marked = {}, {}  # names / class or method qualnames -> what they miss
+    with open(target_file, encoding="utf-8", errors="replace") as fh:
+        source_text = fh.read()
+    tree = ast.parse(source_text)
 
     def in_project(module):
         f = getattr(module, "__file__", None)
@@ -150,6 +177,16 @@ def driver():
     class MissingOnBase(Exception):
         pass
 
+    def touch():
+        """Record where the test file uses a stub: its innermost module or class-body frame
+        (not a function's), as (scope name, line)."""
+        f = sys._getframe(1)
+        while f is not None:
+            if f.f_code.co_filename == code_file and not f.f_code.co_flags & 1:  # CO_OPTIMIZED
+                touched.add((f.f_code.co_name, f.f_lineno))
+                return
+            f = f.f_back
+
     class Missing:
         """A name only HEAD defines. While modules import it absorbs every use (a derived
         constant, a decorator, a base class, a dict key); once tests run any use raises."""
@@ -163,6 +200,7 @@ def driver():
         def _use(self, *args, **kwargs):
             if state["armed"]:
                 raise MissingOnBase(f"missing on base: {self._name}")
+            touch()
             return self
 
         def __call__(self, *args, **kwargs):
@@ -172,6 +210,7 @@ def driver():
             return self
 
         def __mro_entries__(self, bases):
+            self._use()
             return ()  # a base class only HEAD defines: left out
 
         def __getattr__(self, attr):
@@ -213,70 +252,99 @@ def driver():
         def __getattr__(self, attr):
             return getattr(self.__dict__["_red_first_module"], attr)
 
+    def stub_module(name):
+        if name not in stub_cache:
+            stub = types.ModuleType(name)
+            info = head_attrs.get(name, {"names": [], "package": True})
+            for attr in info["names"]:
+                if not attr.startswith("__"):
+                    setattr(stub, attr, Missing(f"{name}.{attr}"))
+            if info["package"]:
+                stub.__path__ = []
+            stub_cache[name] = stub
+            stub_modules.add(id(stub))
+        return stub_cache[name]
+
     def patch(module):
-        """PEP 562 __getattr__ on a module for its stubbed attributes, while modules import."""
-        names = {x for m, x in attr_stubs if m == module.__name__}
-        if not names or any(m is module for m, _ in patched):
+        """PEP 562 __getattr__ answering a stubbed attribute to the module that needs it."""
+        if id(module) in patched:
             return
         original = module.__dict__.get("__getattr__")
 
         def __getattr__(attr):
-            if attr in names and not state["armed"]:
+            accessor = sys._getframe(1).f_globals.get("__name__")
+            if not state["armed"] and (accessor, module.__name__, attr) in attr_stubs:
+                touch()
                 return Missing(f"{module.__name__}.{attr}")
             if original:
                 return original(attr)
             raise AttributeError(f"module {module.__name__!r} has no attribute {attr!r}")
 
-        patched.append((module, original))
+        patched.add(id(module))
         module.__getattr__ = __getattr__
 
     real_import = builtins.__import__
 
     def lenient_import(name, globals=None, locals=None, fromlist=(), level=0):
+        importer = (globals or {}).get("__name__")
+        absolute = name
+        if level:
+            try:
+                absolute = importlib.util.resolve_name("." * level + name, (globals or {}).get("__package__"))
+            except (ImportError, ValueError):
+                pass
+        if any(i == importer and (absolute == m or absolute.startswith(m + ".")) for i, m in module_stubs):
+            if not fromlist and "." in absolute:  # `import a.b`: binds a
+                return real_import(absolute.split(".")[0], globals, locals, (), 0)
+            return stub_module(absolute)
         module = real_import(name, globals, locals, fromlist, level)
-        for m in {m for m, _ in attr_stubs}:
+        for _, m, _ in attr_stubs:
             if m in sys.modules:
                 patch(sys.modules[m])
         stubs = {
             a: Missing(f"{module.__name__}.{a}")
             for a in fromlist or ()
-            if a != "*" and (module.__name__, a) in from_stubs and not hasattr(module, a)
+            if a != "*" and (importer, module.__name__, a) in from_stubs and not hasattr(module, a)
         }
         return Proxy(module, stubs) if stubs else module
 
-    def install_module_stubs():
-        for name in module_stubs:
-            if name not in sys.modules:
-                stub = types.ModuleType(name)
-                for attr in head_attrs[name]["names"]:
-                    if not attr.startswith("__"):
-                        setattr(stub, attr, Missing(f"{name}.{attr}"))
-                if head_attrs[name]["package"]:
-                    stub.__path__ = []
-                sys.modules[name] = stub
-                parent, _, child = name.rpartition(".")
-                if parent in sys.modules:
-                    setattr(sys.modules[parent], child, stub)
-
     def learn(exc):
-        """Stub the name whose absence on the base made `exc` escape; False if none."""
-        msg = str(exc)
+        """Stub what the base lacks behind `exc`, for the module it escaped from; False if
+        there is nothing HEAD defines to stub."""
+        importer, tb = None, exc.__traceback__
+        while tb is not None:  # the last frame outside the driver (its code is "<string>")
+            if tb.tb_frame.f_code.co_filename != "<string>":
+                importer = tb.tb_frame.f_globals.get("__name__")
+            tb = tb.tb_next
         if isinstance(exc, ModuleNotFoundError):
-            if exc.name in head_attrs and exc.name not in module_stubs:
-                module_stubs.add(exc.name)
+            if exc.name in head_attrs and (importer, exc.name) not in module_stubs:
+                module_stubs.add((importer, exc.name))
                 return True
             return False
-        found = None
         if isinstance(exc, ImportError):
-            m = re.search(r"cannot import name '([^']+)' from '([^']+)'", msg)
+            m = re.search(r"cannot import name '([^']+)' from '([^']+)'", str(exc))
             found, kind = (m and (m.group(2), m.group(1))), from_stubs
         elif isinstance(exc, AttributeError):
-            m = re.search(r"module '([^']+)' has no attribute '([^']+)'", msg)
+            m = re.search(r"module '([^']+)' has no attribute '([^']+)'", str(exc))
             found, kind = (m and (m.group(1), m.group(2))), attr_stubs
-        if found and found[1] in head_attrs.get(found[0], {}).get("names", ()) and found not in kind:
-            kind.add(found)
-            return True
-        return False
+        else:
+            return False
+        if not found or found[1] not in head_attrs.get(found[0], {}).get("names", ()):
+            return False
+        base_module = sys.modules.get(found[0])
+        new = {(importer, *found)}  # with every other name HEAD has and the base lacks
+        new |= {
+            (importer, found[0], n)
+            for n in head_attrs[found[0]]["names"]
+            if base_module is not None and not n.startswith("__") and n not in vars(base_module)
+        }
+        if new <= kind:
+            return False
+        kind |= new
+        for _, m, _ in attr_stubs:
+            if m in sys.modules:
+                patch(sys.modules[m])
+        return True
 
     def locate(rel, naming):
         """(top-level directory, module name) as discovery would import the file."""
@@ -289,14 +357,10 @@ def driver():
             top = os.path.dirname(top)
         return top, ".".join(parts)
 
-    def load(rel, naming, first):
-        """Import a test file; on the base, stub what HEAD defines and retry."""
-        top, name = locate(rel, naming)
-        if top not in sys.path:
-            sys.path.insert(0 if first else 1, top)
+    def import_name(name):
+        """Import a module by name; on the base, stub what HEAD defines and retry."""
         exc = None
         for _ in range(64):
-            install_module_stubs()
             builtins.__import__ = lenient_import
             try:
                 return importlib.import_module(name), None
@@ -309,18 +373,211 @@ def driver():
         return None, exc
 
     def load_file(rel, first=False):
-        if mode == "base":
-            return load(rel, namings.get(rel, "package"), first)
-        module, exc = load(rel, "package", first)
-        if module is None and isinstance(exc, ImportError) and locate(rel, "package") != locate(rel, "flat"):
-            flat = load(rel, "flat", first)
-            if flat[0] is not None:  # named as `discover -s <dir>` would
-                namings[rel] = "flat"
-                return flat
-        namings[rel] = "package"
+        """Import a test file, deciding at HEAD how discovery names it."""
+        naming = namings.get(rel, "package")
+        for attempt in ("package", "flat") if mode == "head" else (naming,):
+            top, name = locate(rel, attempt)
+            if top not in sys.path:
+                sys.path.insert(0 if first else 1, top)
+            module, exc = import_name(name)
+            namings[rel] = attempt
+            if module is not None or not isinstance(exc, ImportError) or locate(rel, "flat") == (top, name):
+                return module, exc
         return module, exc
 
-    module, exc = load_file(path, first=True)
+    DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)
+
+    def bound(stmt):
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return [stmt.name]
+        names = []
+        for n in ast.walk(stmt):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                names.append(n.id)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.append(n.name)
+            elif isinstance(n, (ast.Import, ast.ImportFrom)):
+                names += [(a.asname or a.name).split(".")[0] for a in n.names if a.name != "*"]
+        return names
+
+    def refers(g, nodes):
+        """What a stubbed or derived name, or a stubbed attribute, in `nodes` misses."""
+        for node in nodes:
+            for n in ast.walk(node):
+                if isinstance(n, ast.Name) and n.id in derived:
+                    return derived[n.id]
+                if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name):
+                    owner = g.get(n.value.id)
+                    owner_name = owner.__name__ if isinstance(owner, types.ModuleType) else None
+                    if owner_name and (state["module"], owner_name, n.attr) in attr_stubs:
+                        return f"{owner_name}.{n.attr}"
+        return None
+
+    def hit(start, stop, scope="<module>"):
+        return any(name == scope and start <= line < stop for name, line in touched)
+
+    def mark_class(g, cls, prefix):
+        qual = prefix + cls.name
+        start = min([cls.lineno] + [d.lineno for d in cls.decorator_list])
+        first = cls.body[0].lineno if cls.body else cls.lineno + 1
+        why = refers(g, [*cls.bases, *cls.keywords, *cls.decorator_list])
+        why = why or (hit(start, first) and f"line {cls.lineno}: a base or decorator")
+        for item in cls.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                deco = item.decorator_list
+                start = deco[0].lineno if deco else item.lineno
+                defaults = [*item.args.defaults, *[d for d in item.args.kw_defaults if d]]
+                d = refers(g, [*deco, *defaults]) or (hit(start, item.lineno + 1, cls.name) and f"line {start}: a decorator or default")
+                if d:
+                    marked[f"{qual}.{item.name}"] = d
+            elif isinstance(item, ast.ClassDef):
+                mark_class(g, item, qual + ".")
+            else:
+                why = why or refers(g, [item]) or (hit(item.lineno, item.end_lineno + 1, cls.name) and f"line {item.lineno}")
+        if why:
+            marked[qual] = why
+
+    def run_statement(g, stmt, flags):
+        code = compile(ast.Module(body=[stmt], type_ignores=[]), code_file, "exec", flags=flags, dont_inherit=True)
+        why = None if isinstance(stmt, DEFS) else refers(g, [stmt])
+        error = None
+        for _ in range(64 if why is None else 0):
+            touched.clear()
+            try:
+                exec(code, g)
+                error = None
+                break
+            except BaseException as e:
+                error = e
+                if not learn(e):
+                    break
+                why = None if isinstance(stmt, DEFS) else refers(g, [stmt])
+                if why:  # it now names a stub: skip it, as it never runs on the real base
+                    break
+        if why is None and error is not None:
+            why = f"line {stmt.lineno}: {type(error).__name__}"
+        names = bound(stmt)
+        if why is not None:
+            for n in names:
+                g[n] = Missing(why)
+                derived[n] = why
+            if isinstance(stmt, ast.ClassDef):
+                marked[stmt.name] = why
+            return
+        for n, v in list(g.items()):  # bound to a stub, a star import's names included
+            if n not in derived and isinstance(v, Missing):
+                derived[n] = v._name
+            elif n not in derived and id(v) in stub_modules:
+                derived[n] = v.__name__
+        if isinstance(stmt, ast.ClassDef):
+            mark_class(g, stmt, "")
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            deco = stmt.decorator_list
+            d = deco and (refers(g, deco) or (hit(deco[0].lineno, stmt.lineno) and f"line {deco[0].lineno}: a decorator"))
+            if d:
+                derived[stmt.name] = d
+        elif not isinstance(stmt, (ast.Import, ast.ImportFrom)) and hit(stmt.lineno, stmt.end_lineno + 1):
+            for n in names:  # built from a stub while importing
+                derived.setdefault(n, f"line {stmt.lineno}")
+
+    def run_module(rel):
+        """The test module on the base, one top-level statement at a time: a statement that
+        names a stub is skipped, one that raises has its names stubbed, and what a stub
+        touched while importing is marked."""
+        top, name = locate(rel, namings.get(rel, "package"))
+        if top not in sys.path:
+            sys.path.insert(0, top)
+        state["module"] = name
+        parent, _, child = name.rpartition(".")
+        package, exc = import_name(parent) if parent else (None, None)
+        if parent and package is None:
+            return None, exc
+        spec = importlib.util.spec_from_file_location(name, code_file)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        if package is not None:  # as the import system binds a submodule on its package
+            setattr(package, child, module)
+        module.__doc__ = ast.get_docstring(tree)
+        flags = 0
+        builtins.__import__ = lenient_import
+        try:
+            for stmt in tree.body:
+                if isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__":
+                    for a in stmt.names:
+                        flags |= getattr(__future__, a.name).compiler_flag
+                run_statement(module.__dict__, stmt, flags)
+        finally:
+            builtins.__import__ = real_import
+        return module, None
+
+    def reached_globals():
+        """Global names the test can reach: its method, its class's fixtures, the `self.`
+        methods they call and the module functions they call, followed transitively."""
+        table = symtable.symtable(source_text, code_file, "exec")
+        classes_ast, functions_ast = {}, {}
+
+        def walk(body, prefix):
+            for node in body:
+                if isinstance(node, ast.ClassDef):
+                    classes_ast[prefix + node.name] = node
+                    walk(node.body, f"{prefix}{node.name}.")
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not prefix:
+                    functions_ast.setdefault(node.name, []).append(node)
+                elif isinstance(node, (ast.If, ast.Try, ast.With)) or type(node).__name__ == "TryStar":
+                    for block in (node.body, getattr(node, "orelse", []), getattr(node, "finalbody", [])):
+                        walk(block, prefix)
+                    for handler in getattr(node, "handlers", []):
+                        walk(handler.body, prefix)
+
+        walk(tree.body, "")
+        family, todo = [], [qualname]
+        while todo:  # the class and the classes of this file it inherits from
+            c = todo.pop()
+            if c in family or c not in classes_ast:
+                continue
+            family.append(c)
+            for b in classes_ast[c].bases:
+                simple = b.id if isinstance(b, ast.Name) else getattr(b, "attr", None)
+                todo += [k for k in classes_ast if k.rsplit(".", 1)[-1] == simple]
+
+        def scope_table(c):
+            t = table
+            for part in c.split(".") if c else []:
+                t = next((x for x in t.get_children() if x.get_name() == part and x.get_type() == "class"), None)
+                if t is None:
+                    return None
+            return t
+
+        fixtures = {"setUp", "tearDown", "setUpClass", "tearDownClass", "asyncSetUp", "asyncTearDown"}
+        todo = [(c, n) for c in family for n in fixtures | {method}]
+        used, seen = set(), set()
+        while todo:
+            c, n = todo.pop()
+            if (c, n) in seen:
+                continue
+            seen.add((c, n))
+            parent = scope_table(c)
+            for t in [x for x in (parent.get_children() if parent else []) if x.get_name() == n and x.get_type() == "function"]:
+                stack = [t]
+                while stack:
+                    s = stack.pop()
+                    names = {sym.get_name() for sym in s.get_symbols() if sym.is_referenced() and sym.is_global()}
+                    used |= names
+                    todo += [("", g) for g in names if g in functions_ast]
+                    stack += [x for x in s.get_children() if x.get_type() != "class"]
+            nodes = functions_ast.get(n, []) if not c else [
+                x for x in ast.walk(classes_ast[c]) if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef)) and x.name == n
+            ]
+            for node in nodes:
+                for x in ast.walk(node):
+                    if isinstance(x, ast.Attribute) and isinstance(x.value, ast.Name) and x.value.id in ("self", "cls"):
+                        todo += [(f, x.attr) for f in family]
+        return used
+
+    if mode == "base":
+        module, exc = run_module(path)
+    else:
+        module, exc = load_file(path, first=True)
     if module is None:
         finish(["error", f"module did not load: {type(exc).__name__}"])
     loaded, load_errors = [module], []
@@ -330,25 +587,17 @@ def driver():
             load_errors.append(f"{other}: module did not load: {type(e).__name__}")
         elif m is not module:
             loaded.append(m)
-    state["armed"] = True  # patched modules now answer as the base would
+    state["armed"] = True  # stubs and patched modules now answer as the base would
 
-    derived = {k: v._name for k, v in vars(module).items() if isinstance(v, Missing)}
-    if derived:  # a test that names a missing name cannot run on the real base
-        with open(target_file, encoding="utf-8", errors="replace") as fh:
-            table = symtable.symtable(fh.read(), path, "exec")
-        for part in qualname.split("."):
-            table = next((t for t in table.get_children() if t.get_name() == part and t.get_type() == "class"), None)
-            if table is None:
-                break
-        todo = [t for t in table.get_children() if t.get_name() == method] if table else []
-        used = set()
-        while todo:
-            t = todo.pop()
-            used |= {s.get_name() for s in t.get_symbols() if s.is_referenced() and s.is_global()}
-            todo += [c for c in t.get_children() if c.get_type() != "class"]
-        hit = sorted({derived[n] for n in used if n in derived})
-        if hit:
-            finish(["error", "missing on base: " + ", ".join(hit)])
+    if mode == "base":  # a test that depends on what the base lacks cannot run there
+        parts = qualname.split(".") + [method]
+        for i in range(1, len(parts) + 1):
+            if ".".join(parts[:i]) in marked:
+                finish(["error", "missing on base: " + marked[".".join(parts[:i])]])
+        if derived:
+            names = sorted({derived[n] for n in reached_globals() if n in derived})
+            if names:
+                finish(["error", "missing on base: " + ", ".join(names)])
 
     def source(cls):
         f = getattr(sys.modules.get(cls.__module__), "__file__", None)
@@ -484,11 +733,16 @@ def changed_test_files(entries):
     return out
 
 
-def is_support(path):
-    """Test code or data: under a test-support directory, or a conftest.py."""
-    return bool(SUPPORT_DIRS & set(path.split("/")[:-1])) or path.endswith(
-        "conftest.py"
-    )
+def is_support(path, test_dirs):
+    """Test code or data: under a test-support directory (`test/` only when it holds test
+    files: it is often a product package), or a conftest.py."""
+    parts = path.split("/")[:-1]
+    for i, part in enumerate(parts):
+        if part in SUPPORT_DIRS or (
+            part == "test" and "/".join(parts[: i + 1]) in test_dirs
+        ):
+            return True
+    return path.endswith("conftest.py")
 
 
 def _walk(body, kinds):
@@ -515,24 +769,50 @@ def _names(nodes):
 
 
 def _module_context(tree, path, names, own_class):
-    """The module's statements outside definitions, the definitions `names` reach
-    (followed transitively), and the package behind any relative import."""
-    definitions = collections.defaultdict(list)
-    for node in _walk(tree.body, DEFINITIONS):
-        definitions[node.name].append(node)
-    dumps = [ast.dump(n) for n in tree.body if not isinstance(n, DEFINITIONS)]
-    if any(isinstance(n, ast.ImportFrom) and n.level for n in ast.walk(tree)):
-        dumps.append(f"package:{os.path.dirname(path)}")
-    seen, todo = {own_class}, set(names)
+    """The module statements a test reaches: those that bind or use a name it uses,
+    followed through the names they use; star imports always; and the package behind a
+    relative import among them."""
+    statements = []
+    for node in tree.body:
+        loads = {
+            n.id
+            for n in ast.walk(node)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+        }
+        if isinstance(node, DEFINITIONS):
+            binds = {node.name}
+        else:
+            binds = {
+                n.id
+                for n in ast.walk(node)
+                if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)
+            }
+            for n in ast.walk(node):
+                if isinstance(n, (ast.Import, ast.ImportFrom)):
+                    binds |= {(a.asname or a.name).split(".")[0] for a in n.names}
+        statements.append((node, binds, loads))
+    star = {
+        i
+        for i, (node, _, _) in enumerate(statements)
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)
+    }
+    included, reached, todo = set(star), set(), set(names)
     while todo:
         name = todo.pop()
-        if name in seen:
+        if name in reached or name == own_class:
             continue
-        seen.add(name)
-        for node in definitions.get(name, ()):
-            dumps.append(ast.dump(node))
-            todo |= _names([node])
-    return "|".join(sorted(dumps))
+        reached.add(name)
+        for i, (node, binds, loads) in enumerate(statements):
+            if i not in included and (
+                name in binds or (not isinstance(node, DEFINITIONS) and name in loads)
+            ):
+                included.add(i)
+                todo |= loads
+    nodes = [statements[i][0] for i in sorted(included)]
+    dumps = [ast.dump(n) for n in nodes]
+    if any(isinstance(n, ast.ImportFrom) and n.level for n in nodes):
+        dumps.append(f"package:{os.path.dirname(path)}")
+    return "|".join(dumps)
 
 
 def test_methods(source, path):
@@ -564,8 +844,14 @@ def test_methods(source, path):
     return found
 
 
-def class_names(source):
-    return {q for q, _ in _test_classes(ast.parse(source).body)}
+def class_keys(source):
+    """{class qualname: its heading and body}, to pair a renamed class one to one."""
+    return {
+        q: "|".join(
+            ast.dump(n) for n in [*c.bases, *c.keywords, *c.decorator_list, *c.body]
+        )
+        for q, c in _test_classes(ast.parse(source).body)
+    }
 
 
 def pins(source, first, last):
@@ -593,9 +879,9 @@ def base_source(base, path):
 
 def new_tests(base, files):
     """([(path, test_id, pin reasons)], [renamed ids], [parse errors], [new classes])."""
-    new, gone, errors, new_classes = [], [], [], []
+    new, gone, errors, new_classes, gone_classes = [], [], [], [], []
     for head_path, base_path in files:
-        head, source, head_classes = {}, "", set()
+        head, source, head_classes = {}, "", {}
         if head_path:
             source = pathlib.Path(head_path).read_text(
                 encoding="utf-8", errors="replace"
@@ -603,23 +889,26 @@ def new_tests(base, files):
             try:
                 head, head_classes = (
                     test_methods(source, head_path),
-                    class_names(source),
+                    class_keys(source),
                 )
             except SyntaxError as exc:
                 errors.append(
                     f"{head_path}:RED-FIRST:does not parse at HEAD (line {exc.lineno})"
                 )
                 continue
-        before, base_classes = {}, set()
+        before, base_classes = {}, {}
         if base_path:
             try:
                 text = base_source(base, base_path)
-                before, base_classes = test_methods(text, base_path), class_names(text)
+                before, base_classes = test_methods(text, base_path), class_keys(text)
             except (subprocess.CalledProcessError, SyntaxError, ValueError):
                 before = {}  # fails closed: every test in the file is new
         new_classes += [
-            f"{head_path}::{q}" for q in sorted(head_classes - base_classes)
+            (f"{head_path}::{q}", k)
+            for q, k in head_classes.items()
+            if q not in base_classes
         ]
+        gone_classes += [k for q, k in base_classes.items() if q not in head_classes]
         # In a moved file, a test whose context changed (another package behind its relative
         # imports, say) is new; in a file that stays put an edited test is a changed one.
         moved = bool(head_path and base_path and head_path != base_path)
@@ -648,27 +937,28 @@ def new_tests(base, files):
             renamed.append(f"{path} {tid} (renamed from {origin[k]})")
         else:
             tests.append((path, tid, reasons))
-    return tests, renamed, errors, new_classes
+    # A renamed class (same heading and body) is not new either: one to one, as for tests.
+    gone_count = collections.Counter(gone_classes)
+    new_count = collections.Counter(k for _, k in new_classes)
+    added = [
+        n for n, k in new_classes if not (gone_count[k] == 1 and new_count[k] == 1)
+    ]
+    return tests, renamed, errors, added
 
 
-def _base_ref(expr, path, imported):
-    """What a base-class expression names: ("file", path, qualname) for a class of this
-    file, ("module", last module name part, qualname) for an imported one, else None."""
-    parts = []
-    while isinstance(expr, ast.Attribute):
-        parts.insert(0, expr.attr)
-        expr = expr.value
-    if not isinstance(expr, ast.Name):
-        return None
-    if expr.id not in imported:
-        return "file", path, ".".join([expr.id, *parts])
-    module, name = imported[expr.id]
-    qualname = ".".join([name, *parts] if name else parts)
-    return ("module", module.rsplit(".", 1)[-1], qualname) if qualname else None
+def _base_names(expr, imported):
+    """Simple names a base-class expression may stand for: its last part, and the original
+    name behind an import alias."""
+    names = set()
+    if isinstance(expr, ast.Attribute):
+        names.add(expr.attr)
+    elif isinstance(expr, ast.Name):
+        names |= {expr.id, imported.get(expr.id, expr.id)}
+    return names
 
 
 def class_graph():
-    """{test file at HEAD: [(class qualname, [base refs])]}, to find runners elsewhere."""
+    """{test file at HEAD: [(class simple name, {simple names its bases may stand for})]}."""
     graph = {}
     for path in git("ls-files", "-z").split("\0"):
         if not TEST_FILE_RE.search(path):
@@ -679,54 +969,39 @@ def class_graph():
             )
         except (OSError, SyntaxError, ValueError):
             continue
-        imported = {}
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for a in node.names:
-                    imported[a.asname or a.name.split(".")[0]] = (
-                        a.name if a.asname else a.name.split(".")[0],
-                        None,
-                    )
-            elif isinstance(node, ast.ImportFrom):
-                for a in node.names:
-                    imported[a.asname or a.name] = (
-                        node.module or a.name,
-                        node.module and a.name,
-                    )
+        imported = {
+            a.asname: a.name.rsplit(".", 1)[-1]
+            for n in ast.walk(tree)
+            if isinstance(n, (ast.Import, ast.ImportFrom))
+            for a in n.names
+            if a.asname
+        }
         graph[path] = [
-            (q, [_base_ref(b, path, imported) for b in cls.bases])
-            for q, cls in _test_classes(tree.body)
+            (
+                q.rsplit(".", 1)[-1],
+                set().union(*(_base_names(b, imported) for b in c.bases)),
+            )
+            for q, c in _test_classes(tree.body)
         ]
     return graph
 
 
-def runner_files(graph, path, qualname):
-    """Other test files whose classes inherit `qualname`, through any chain of classes."""
-    relevant, files, changed = {(path, qualname)}, set(), True
-    while changed:
-        changed = False
-        for f, classes in graph.items():
-            for q, bases in classes:
-                if (f, q) in relevant:
-                    continue
-                if any(
-                    ref
-                    and (
-                        (ref[0] == "file" and (ref[1], ref[2]) in relevant)
-                        or (
-                            ref[0] == "module"
-                            and any(
-                                pathlib.PurePosixPath(p).stem == ref[1] and r == ref[2]
-                                for p, r in relevant
-                            )
-                        )
-                    )
-                    for ref in bases
-                ):
-                    relevant.add((f, q))
-                    files.add(f)
-                    changed = True
-    return sorted(files - {path})
+def runner_files(graph, path, qualname, cache):
+    """Other test files with a class that may inherit `qualname`, through any chain of
+    classes, matched by simple name (a superset: the driver checks the real MRO)."""
+    simple = qualname.rsplit(".", 1)[-1]
+    if simple not in cache:
+        relevant, files, changed = {simple}, set(), True
+        while changed:
+            changed = False
+            for f, classes in graph.items():
+                for name, bases in classes:
+                    if bases & relevant and (name not in relevant or f not in files):
+                        changed = changed or name not in relevant
+                        relevant.add(name)
+                        files.add(f)
+        cache[simple] = files
+    return sorted(cache[simple] - {path})
 
 
 def run_one(cwd, path, test_id, mode, scratch, config):
@@ -801,20 +1076,39 @@ def judge(path, test_id, reasons, on_base, why, at_head, head_why):
     return line, violations
 
 
-def prepare_worktree(worktree, base, files, entries):
+def ignored_modules(worktree):
+    """Gitignored modules the checkout holds and the base worktree lacks: single files, and
+    packages inside ignored directories (environments and caches left out)."""
+    found = []
+    listing = git(
+        "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"
+    )
+    for entry in listing.split("\0"):
+        parts = entry.rstrip("/").split("/")
+        if not entry or SKIP_DIRS & set(parts) or any(p.startswith(".") for p in parts):
+            continue
+        if entry.endswith("/"):
+            if not pathlib.Path(entry, "__init__.py").exists():
+                continue
+            for f in sorted(pathlib.Path(entry).rglob("*")):
+                if f.suffix in GENERATED and not SKIP_DIRS & set(f.parts):
+                    found.append(f.as_posix())
+        elif entry.endswith(GENERATED):
+            found.append(entry)
+    return [f for f in found[:MAX_GENERATED] if not (worktree / f).exists()]
+
+
+def prepare_worktree(worktree, base, files, entries, test_dirs):
     """The base's code with the PR's test files and test-support files, the `__init__.py`
     files the base lacks and the gitignored modules the checkout has; minus deleted tests."""
     git("worktree", "add", "--detach", "-q", str(worktree), base)
     copies = [head for head, _ in files if head]
-    copies += [dst for status, _, dst in entries if status != "D" and is_support(dst)]
-    ignored = git(
-        "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"
-    )
     copies += [
-        p
-        for p in ignored.split("\0")
-        if p.endswith(GENERATED) and not (worktree / p).exists()
+        dst
+        for status, _, dst in entries
+        if status != "D" and is_support(dst, test_dirs)
     ]
+    copies += ignored_modules(worktree)
     for path in list(copies):
         for parent in pathlib.PurePosixPath(path).parents:
             init = parent / "__init__.py"
@@ -825,7 +1119,7 @@ def prepare_worktree(worktree, base, files, entries):
             ):
                 copies.append(str(init))
     for status, src, _ in entries:  # what the PR deletes from the test side
-        if status == "D" and (TEST_FILE_RE.search(src) or is_support(src)):
+        if status == "D" and (TEST_FILE_RE.search(src) or is_support(src, test_dirs)):
             (worktree / src).unlink(missing_ok=True)
     for path in copies:
         dest = worktree / path
@@ -863,17 +1157,26 @@ def main(argv):
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="red-first-"))
     worktree = tmp / "base"
     summary = []
-    graph = class_graph()
+    graph, cache = class_graph(), {}
+    test_dirs = {os.path.dirname(p) for p in graph}
     try:
-        prepare_worktree(worktree, base, files, entries)
+        prepare_worktree(worktree, base, files, entries, test_dirs)
         for n, (path, test_id, reasons) in enumerate(tests):
-            others = runner_files(graph, path, test_id.rsplit(".", 1)[0])
+            others = runner_files(graph, path, test_id.rsplit(".", 1)[0], cache)
             scratch = tmp / str(n)
             scratch.mkdir()
             at_head, head_why, on_base, why = verdicts(
                 worktree, path, test_id, others, new_classes, scratch
             )
-            if at_head == "not-a-test":
+            if (
+                at_head == "not-a-test" and others
+            ):  # a runner may exist the check missed
+                line = f"  {path} {test_id}: no TestCase runs it"
+                violations.append(
+                    f"{path}:RED-FIRST:{test_id} no TestCase runs it, though "
+                    f"{', '.join(others)} may inherit its class: the check cannot see it run"
+                )
+            elif at_head == "not-a-test":
                 line = f"  {path} {test_id}: not a test (no TestCase runs it)"
             else:
                 line, found = judge(

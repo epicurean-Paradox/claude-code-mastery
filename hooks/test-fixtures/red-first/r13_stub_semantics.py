@@ -34,13 +34,19 @@ class TestA(unittest.TestCase):
 }
 
 # Intended outcome: the exit code, and lines the output must or must not hold.
+# A decorator or default that names the stub (skipIf, f=notify) ties the test to it: red,
+# as on the real base, where the module cannot import. test_isinstance errors at HEAD.
 EXIT = 1
-# test_isinstance passes a function as isinstance's class argument: it errors at HEAD too.
 EXPECT = [
-    "TestA.test_skipif_is_none_green is green on base",
-    "TestA.test_default_arg_green is green on base",
+    "TestA.test_skipif_is_none_green: error on base (missing on base: lib.notify)",
+    "TestA.test_default_arg_green: error on base (missing on base: lib.notify)",
     "TestA.test_isinstance does not pass at HEAD (error: TypeError)",
     "TestA.test_eq: error on base (missing on base: lib.notify)",
     "TestA.test_process_notifies: error on base (AttributeError)",
 ]
-EXPECT_NOT = ["RED-FIRST:TestA.test_eq", "RED-FIRST:TestA.test_process_notifies"]
+EXPECT_NOT = [
+    "RED-FIRST:TestA.test_eq",
+    "RED-FIRST:TestA.test_process_notifies",
+    "RED-FIRST:TestA.test_skipif",
+    "RED-FIRST:TestA.test_default",
+]

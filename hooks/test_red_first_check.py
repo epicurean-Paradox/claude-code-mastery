@@ -198,8 +198,9 @@ class TestRedFirstCheck(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("error on base (missing on base: newmod.VALUE)", out)
 
-    def test_a_module_that_cannot_load_on_the_base_counts_as_red(self):
-        # An error no stub can fix: the module asserts on the base's code at import.
+    def test_a_failing_module_statement_leaves_the_other_tests_running(self):
+        # An error no stub can fix: the module asserts on the base's code at import. The
+        # statement binds nothing, so the test still runs, and is red on its own.
         r = Repo()
         self.addCleanup(r.close)
         r.write("lib.py", LIB_FIXED)
@@ -213,7 +214,7 @@ class TestRedFirstCheck(unittest.TestCase):
         r.commit("assert at import")
         code, out = r.check()
         self.assertEqual(code, 0, out)
-        self.assertIn("error on base (module did not load: AssertionError)", out)
+        self.assertIn("TestAdd.test_adds: red on base", out)
 
     def test_the_check_runs_the_named_test_only(self):
         # test_sum passes on the base (unmarked: a violation). A red near-namesake must not
@@ -952,7 +953,7 @@ class TestDriverEdges(unittest.TestCase):
             },
         )
         self.assertEqual(code, 0, out)
-        self.assertIn("error on base (module did not load: ImportError)", out)
+        self.assertIn("error on base (missing on base: line 3: ImportError)", out)
 
     def test_a_stub_used_through_a_helper_raises_once_tests_run(self):
         code, out = self.run_scenario(
@@ -984,6 +985,151 @@ class TestDriverEdges(unittest.TestCase):
                 "tests/test_contract.py": LIB_HEADER + contract,
                 "tests/test_backends.py": backends,
             },
+        )
+
+    def test_a_helper_module_learns_every_kind_of_stub(self):
+        # tests/helpers.py imports normally (not statement by statement): a module-level
+        # attribute, a decorator, a base class and 70 names only HEAD has must all load.
+        names = ", ".join(f"E{i}" for i in range(70))
+        helpers = (
+            "import lib\n"
+            f"from lib import new_deco, NewBase, {names}\n"
+            "FLAG = lib.NEW_FLAG\n\n\n@new_deco\ndef zero():\n    return 0\n\n\nclass Fake(NewBase):\n    pass\n"
+        )
+        new_lib = (
+            LIB_FIXED
+            + "\nNEW_FLAG = True\n\n\ndef new_deco(f):\n    return f\n\n\nclass NewBase:\n    pass\n\n"
+            + "".join(f"E{i} = {i}\n" for i in range(70))
+        )
+        header = (
+            LIB_HEADER
+            + "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))\nimport helpers\n"
+        )
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": new_lib,
+                "tests/helpers.py": helpers,
+                "tests/test_lib.py": header
+                + "\nclass TestHelper(unittest.TestCase):\n    def test_zero(self):\n        self.assertEqual(lib.add(helpers.zero(), 0), 0)\n",
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestHelper.test_zero is green on base", out)
+
+    def test_a_stubbed_decorator_ties_only_its_own_test(self):
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": "LEGACY = False\n\n" + LIB_FIXED,
+                "tests/test_lib.py": LIB_HEADER
+                + "\nclass TestAdd(unittest.TestCase):\n    def test_zero_sum(self):\n        self.assertEqual(lib.add(0, 0), 0)\n"
+                + "\n    @unittest.skipIf(lib.LEGACY, 'legacy')\n    def test_adds(self):\n        self.assertEqual(lib.add(2, 3), 5)\n",
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestAdd.test_zero_sum is green on base", out)
+        self.assertIn(
+            "TestAdd.test_adds: error on base (missing on base: lib.LEGACY)", out
+        )
+
+    def test_a_stub_reached_through_a_self_helper_counts(self):
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": LIB_FIXED
+                + "\n\ndef plugins():\n    return {'csv': object()}\n",
+                "tests/test_lib.py": LIB_HEADER.replace(
+                    "import lib", "from lib import plugins"
+                )
+                + "CSV = plugins()['csv']\n\n\nclass TestCsv(unittest.TestCase):\n    def csv(self):\n        return CSV\n\n    def test_loaded(self):\n        self.assertIsNotNone(self.csv())\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "TestCsv.test_loaded: error on base (missing on base: lib.plugins)", out
+        )
+
+    def test_a_statement_naming_a_stub_is_skipped(self):
+        # Registering a new handler would leave a stub in lib's registry for every test.
+        reg = "REGISTRY = []\n\n\ndef register(h):\n    REGISTRY.append(h)\n\n\ndef dispatch(kind):\n    for h in REGISTRY:\n        if h.kind == kind:\n            return h\n    raise LookupError(kind)\n"
+        code, out = self.run_scenario(
+            {"lib.py": reg},
+            {
+                "lib.py": reg + "\n\nclass Csv:\n    kind = 'csv'\n",
+                "tests/test_lib.py": LIB_HEADER
+                + "from lib import Csv\nlib.register(Csv)\n\n\nclass TestReg(unittest.TestCase):\n    def test_unknown(self):\n        with self.assertRaises(LookupError):\n            lib.dispatch('xml')\n",
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestReg.test_unknown is green on base", out)
+
+    def test_a_class_whose_statement_fails_counts_as_red(self):
+        enum = "import enum\n\n\nclass Color(enum.Enum):\n    RED = 1\n"
+        code, out = self.run_scenario(
+            {"lib.py": enum},
+            {
+                "lib.py": enum + "    PURPLE = 2\n",
+                "tests/test_lib.py": LIB_HEADER
+                + "\nclass TestPurple(unittest.TestCase):\n    color = lib.Color.PURPLE\n\n    def test_value(self):\n        self.assertEqual(self.color.value, 2)\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "TestPurple.test_value: error on base (missing on base: line", out
+        )
+
+    def test_names_from_a_star_import_of_a_stub_module_count(self):
+        code, out = self.run_scenario(
+            {},
+            {
+                "cases_new.py": "WANT = 1\n",
+                "tests/test_lib.py": LIB_HEADER
+                + "from cases_new import *\n\n\nclass TestStar(unittest.TestCase):\n    def test_want(self):\n        self.assertIsNotNone(WANT)\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "TestStar.test_want: error on base (missing on base: cases_new.WANT)", out
+        )
+
+    def test_a_value_built_from_a_stub_by_a_helper_counts(self):
+        # table() turns the stub into an empty dict: only the line that ran marks CASES.
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": LIB_FIXED + "\nTABLE = {'a': 1}\n",
+                "tests/test_lib.py": LIB_HEADER.replace(
+                    "import lib", "from lib import TABLE"
+                )
+                + "\n\ndef table():\n    return dict(TABLE)\n\n\nCASES = table()\n\n\nclass TestTable(unittest.TestCase):\n    def test_all(self):\n        for k, v in CASES.items():\n            self.assertEqual(v, 1)\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("TestTable.test_all: error on base (missing on base: line", out)
+
+    def test_no_runner_while_a_file_may_inherit_the_class_is_a_violation(self):
+        # The only subclass sits where the driver cannot reach it (a class built only when
+        # a flag is set): "not a test" would let a green test through, so it fails.
+        contract = "\nclass Contract:\n    def test_zero(self):\n        self.assertEqual(self.impl(0, 0), 0)\n"
+        backends = (
+            "import os, pathlib, sys, unittest\n"
+            "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))\n"
+            "sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))\n"
+            "import lib\nfrom test_contract import Contract\n"
+            "\nif os.environ.get('WITH_BACKENDS'):\n    class TestV1(Contract, unittest.TestCase):\n        impl = staticmethod(lib.add)\n"
+        )
+        code, out = self.run_scenario(
+            {},
+            {
+                "tests/test_contract.py": LIB_HEADER + contract,
+                "tests/test_backends.py": backends,
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn(
+            "RED-FIRST:Contract.test_zero no TestCase runs it, though tests/test_backends.py",
+            out,
         )
 
     def test_a_runner_file_that_needs_a_new_name_still_runs_the_test(self):

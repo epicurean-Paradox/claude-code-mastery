@@ -28,5 +28,6 @@ class TestOn(unittest.TestCase):
 
 # Intended outcome: the exit code, and lines the output must or must not hold.
 EXIT = 0
-EXPECT = ["TestOn.test_on: red on base"]
+# The class decorator names the stub: the class is tied to it, red, as on the real base.
+EXPECT = ["TestOn.test_on: error on base (missing on base: lib.override_flags)"]
 EXPECT_NOT = []
