@@ -32,9 +32,12 @@ classes the PR adds while an older one exists.
 On the base the test module runs one top-level statement at a time. When an ImportError
 or AttributeError escapes for a name HEAD defines in the repository (`from lib import new`,
 `lib.NEW`, a module the PR adds), that name -- with every other name HEAD's module has and
-the base's lacks -- is stubbed for the module it escaped from, and the import retried; a
-fallback import of any shape keeps working, and code under test never sees a stub. A
-statement that names a stub is skipped and a statement that still raises is stubbed; a
+the base's lacks -- is stubbed for the module it escaped from, and the import retried. A
+fallback import keeps working until an import from the same module has escaped; after
+that, that importer sees every name the base's module lacks as a stub (feature detection
+included), and when the escape comes from code under test, that code gets the stubs. A
+statement that names a stub is skipped whole and a statement that still raises is
+stubbed; if/try/with blocks always run, and their classes are marked like any other. A
 stub absorbs any use while the module imports and raises once tests run. A test counts
 as an error when its class's heading or body, its decorators or defaults, or a module
 global it reaches (through its fixtures, `self.` helpers and module functions) depends on
@@ -58,7 +61,10 @@ methods generated at runtime are not seen; a test whose behaviour depends on its
 can pass as a rename; subTest granularity is the whole test; changed files outside
 test-support directories stay at the base's version; a gitignored generated module is
 HEAD's build, so a fix in generated code is copied into the base too (pin such a test);
-a class body that touches a stub ties every test of that class to it; an editable install
+a class body or a fixture (setUp, ...) that names or touches a stub ties every test of
+that class to it; a skipped statement loses its parts that did not depend on the stub;
+the test file is read as UTF-8 on the base; the open cases are in issue #57 and
+`hooks/test-fixtures/red-first-open/`; an editable install
 that points at the HEAD checkout imports HEAD's code on the base; a test can always tell
 it runs in the base worktree, and reach the driver; the runner is unittest. Exit 0 clean,
 1 a violation, 2 usage (unknown base, not a repo).
@@ -387,18 +393,40 @@ def driver():
 
     DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom)
 
+    SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    INNER = (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+    BLOCK = (ast.If, ast.Try, ast.With, ast.For, ast.While, ast.AsyncWith, ast.AsyncFor)
+    BLOCK += (ast.TryStar,) if hasattr(ast, "TryStar") else ()
+
     def bound(stmt):
-        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        """Module names a statement binds; not the locals of the functions it defines."""
+        if isinstance(stmt, SCOPES):
             return [stmt.name]
-        names = []
-        for n in ast.walk(stmt):
+        names, todo = [], [stmt]
+        while todo:
+            n = todo.pop()
             if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
                 names.append(n.id)
-            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            elif isinstance(n, SCOPES):
                 names.append(n.name)
+                continue
+            elif isinstance(n, INNER):
+                continue
             elif isinstance(n, (ast.Import, ast.ImportFrom)):
                 names += [(a.asname or a.name).split(".")[0] for a in n.names if a.name != "*"]
+            todo.extend(ast.iter_child_nodes(n))
         return names
+
+    def block_classes(stmt):
+        """The classes an if/try/with/for block defines, outside functions."""
+        found, todo = [], list(ast.iter_child_nodes(stmt))
+        while todo:
+            n = todo.pop()
+            if isinstance(n, ast.ClassDef):
+                found.append(n)
+            elif not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                todo.extend(ast.iter_child_nodes(n))
+        return found
 
     def refers(g, nodes):
         """What a stubbed or derived name, or a stubbed attribute, in `nodes` misses."""
@@ -439,7 +467,8 @@ def driver():
 
     def run_statement(g, stmt, flags):
         code = compile(ast.Module(body=[stmt], type_ignores=[]), code_file, "exec", flags=flags, dont_inherit=True)
-        why = None if isinstance(stmt, DEFS) else refers(g, [stmt])
+        runs = isinstance(stmt, DEFS + BLOCK)  # never skipped: a block may hold test classes
+        why = None if runs else refers(g, [stmt])
         error = None
         for _ in range(64 if why is None else 0):
             touched.clear()
@@ -451,7 +480,7 @@ def driver():
                 error = e
                 if not learn(e):
                     break
-                why = None if isinstance(stmt, DEFS) else refers(g, [stmt])
+                why = None if runs else refers(g, [stmt])
                 if why:  # it now names a stub: skip it, as it never runs on the real base
                     break
         if why is None and error is not None:
@@ -461,8 +490,8 @@ def driver():
             for n in names:
                 g[n] = Missing(why)
                 derived[n] = why
-            if isinstance(stmt, ast.ClassDef):
-                marked[stmt.name] = why
+            for cls in [stmt] if isinstance(stmt, ast.ClassDef) else block_classes(stmt):
+                marked[cls.name] = why
             return
         for n, v in list(g.items()):  # bound to a stub, a star import's names included
             if n not in derived and isinstance(v, Missing):
@@ -476,9 +505,12 @@ def driver():
             d = deco and (refers(g, deco) or (hit(deco[0].lineno, stmt.lineno) and f"line {deco[0].lineno}: a decorator"))
             if d:
                 derived[stmt.name] = d
-        elif not isinstance(stmt, (ast.Import, ast.ImportFrom)) and hit(stmt.lineno, stmt.end_lineno + 1):
-            for n in names:  # built from a stub while importing
-                derived.setdefault(n, f"line {stmt.lineno}")
+        elif not isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            for cls in block_classes(stmt):
+                mark_class(g, cls, "")
+            if hit(stmt.lineno, stmt.end_lineno + 1):
+                for n in names:  # built from a stub while importing
+                    derived.setdefault(n, f"line {stmt.lineno}")
 
     def run_module(rel):
         """The test module on the base, one top-level statement at a time: a statement that
@@ -734,13 +766,16 @@ def changed_test_files(entries):
 
 
 def is_support(path, test_dirs):
-    """Test code or data: under a test-support directory (`test/` only when it holds test
-    files: it is often a product package), or a conftest.py."""
+    """Test code or data: under a test-support directory, or a conftest.py. `test/` counts
+    only when it holds test files and does not sit in a package (proj/test/ is often
+    product code)."""
     parts = path.split("/")[:-1]
     for i, part in enumerate(parts):
-        if part in SUPPORT_DIRS or (
-            part == "test" and "/".join(parts[: i + 1]) in test_dirs
-        ):
+        if part in SUPPORT_DIRS:
+            return True
+        parent = "/".join(parts[:i])
+        in_package = bool(parent) and pathlib.Path(parent, "__init__.py").exists()
+        if part == "test" and "/".join(parts[: i + 1]) in test_dirs and not in_package:
             return True
     return path.endswith("conftest.py")
 

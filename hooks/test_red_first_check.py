@@ -1108,6 +1108,49 @@ class TestDriverEdges(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("TestTable.test_all: error on base (missing on base: line", out)
 
+    def test_a_class_in_a_block_is_marked_by_its_decorators(self):
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": "LEGACY = False\n\n" + LIB_FIXED,
+                "tests/test_lib.py": LIB_HEADER
+                + "\nif sys.platform != 'nope':\n    class TestAdd(unittest.TestCase):\n        @unittest.skipIf(lib.LEGACY, 'legacy')\n        def test_adds(self):\n            self.assertEqual(lib.add(2, 3), 5)\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn(
+            "TestAdd.test_adds: error on base (missing on base: lib.LEGACY)", out
+        )
+
+    def test_a_class_in_a_failing_block_counts_as_red(self):
+        enum = "import enum\n\n\nclass Color(enum.Enum):\n    RED = 1\n"
+        code, out = self.run_scenario(
+            {"lib.py": enum + "\n\ndef add(a, b):\n    return a - b\n"},
+            {
+                "lib.py": enum
+                + "    PURPLE = 2\n\n\ndef add(a, b):\n    return a + b\n",
+                "tests/test_lib.py": LIB_HEADER
+                + "\nif True:\n    class TestAdd(unittest.TestCase):\n        def test_adds(self):\n            self.assertEqual(lib.add(2, 3), 5)\n\n    FAVOURITE = lib.Color.PURPLE\n",
+            },
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("TestAdd.test_adds: error on base (missing on base: line", out)
+
+    def test_a_touched_block_does_not_leak_method_locals(self):
+        # The block's condition uses a stub, so what it binds counts as built from one. A
+        # method's local `max` is not a module name: the builtin stays untouched elsewhere.
+        code, out = self.run_scenario(
+            {},
+            {
+                "lib.py": "FEATURE = True\n\n" + LIB_FIXED,
+                "tests/test_lib.py": LIB_HEADER
+                + "\nif lib.FEATURE:\n    class TestFeature(unittest.TestCase):\n        def test_feature(self):\n            max = 3\n            self.assertEqual(max, 3)\n"
+                + "\n\nclass TestAdd(unittest.TestCase):\n    def test_largest(self):\n        self.assertEqual(max(lib.add(2, 0), 0), 2)\n",
+            },
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("RED-FIRST:TestAdd.test_largest is green on base", out)
+
     def test_no_runner_while_a_file_may_inherit_the_class_is_a_violation(self):
         # The only subclass sits where the driver cannot reach it (a class built only when
         # a flag is set): "not a test" would let a green test through, so it fails.
