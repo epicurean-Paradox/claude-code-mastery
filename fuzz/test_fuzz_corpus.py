@@ -26,6 +26,9 @@ EXPECTED = {
         "valid-acme": 0,
         "stale-evidence": 1,
         "yaml-alias": 2,
+        # found by fuzz-nightly: a \U escape above the C int range made PyYAML's chr()
+        # raise OverflowError (Python 3.12; 3.13 raises ValueError), which escaped
+        "crash-unicode-escape-overflow": 2,
     },
     # (exit code, text the output must contain): the reason is pinned, not only the code
     "ledger": {
@@ -79,6 +82,8 @@ EXPECTED = {
         # found by the fuzzer: a pinned path with control characters and ':' reached the
         # path field of the output line and broke the path:RULE:message contract
         "crash-lock-path-control-chars": (1, {"A4"}),
+        # the same \U escape in a council record's frontmatter: a parse error, not a crash
+        "crash-unicode-escape-overflow": (1, {"C2"}),
     },
 }
 

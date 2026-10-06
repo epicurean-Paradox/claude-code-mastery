@@ -261,8 +261,9 @@ def main(argv, today=None):
             return 2
         doc = yaml.load(data, Loader=_NoAliasLoader)  # SafeLoader subclass
     # ValueError: a 5,000-digit integer or an unquoted impossible date (2026-13-45) raises
-    # from PyYAML's constructors; RecursionError: deep nesting in the composer.
-    except (OSError, yaml.YAMLError, ValueError, RecursionError) as exc:
+    # from PyYAML's constructors; RecursionError: deep nesting in the composer;
+    # OverflowError: a \U escape above the C int range, from the scanner's chr() (3.12).
+    except (OSError, yaml.YAMLError, ValueError, RecursionError, OverflowError) as exc:
         _emit(f"validate_regions: cannot read/parse {argv[1]}: {exc}", sys.stderr)
         return 2
     errors, warnings = validate(doc, today=today)
