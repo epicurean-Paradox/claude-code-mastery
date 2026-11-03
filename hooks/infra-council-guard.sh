@@ -48,6 +48,9 @@
 # alias. `wrangler d1 execute` is not judged: its SQL can read or write. It is a
 # guard against the agent's own direct commands, not a sandbox.
 #
+# The repository is the session's. A session in none (a notes vault, a home directory)
+# acts on one through a leading `cd <repo> &&`, and that repository is judged instead.
+#
 # Fails closed: any unexpected error exits 2, Claude Code's blocking exit for a
 # PreToolUse hook, which needs no jq.
 #
@@ -176,6 +179,22 @@ esac
 LINT="${INFRA_COUNCIL_LINT:-$HOOK_DIR/agent-council-lint.py}"
 
 REPO=$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null || echo "")
+# A session in no repository (a notes vault, a home directory) can act on one through a
+# leading `cd <repo> &&`: that repository is then the session's. The leading cd comes off
+# the command, and the command's other directories and paths are judged from there.
+if [ -z "$REPO" ]; then
+    LEAD=$(printf '%s\n' "$NORM" | head -1 | sed -nE 's/^[[:space:](]*(cd|pushd)[[:space:]]+([^;&|[:space:])]+)[[:space:]]*(&&|;).*/\2/p')
+    # shellcheck disable=SC2088  # matching a literal "~" the shell has not expanded
+    case "$LEAD" in "~" | "~/"*) LEAD="$HOME${LEAD#\~}" ;; esac
+    case "$LEAD" in "" | /*) ;; *) LEAD="$HOOK_CWD/$LEAD" ;; esac
+    LEAD_DIR=""
+    if [ -n "$LEAD" ]; then LEAD_DIR=$(cd "$LEAD" 2>/dev/null && pwd -P || echo ""); fi
+    if [ -n "$LEAD_DIR" ]; then REPO=$(git -C "$LEAD_DIR" rev-parse --show-toplevel 2>/dev/null || echo ""); fi
+    if [ -n "$REPO" ]; then
+        HOOK_CWD="$LEAD_DIR"
+        NORM=$(printf '%s\n' "$NORM" | sed -E '1s/^[[:space:](]*(cd|pushd)[[:space:]]+[^;&|[:space:])]+[[:space:]]*(&&|;)//')
+    fi
+fi
 if [ -z "$REPO" ]; then
     block 'Infrastructure mutation BLOCKED: not inside a git repository.
 
