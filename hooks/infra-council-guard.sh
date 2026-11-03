@@ -130,6 +130,9 @@ END='([[:space:])]|$)'
 WR_DEPLOY_RE="^[[:space:]]*delete${END}|[[:space:]](deploy|rollback|preview)${END}|[[:space:]]versions[[:space:]]+(deploy|upload)${END}|[[:space:]]triggers[[:space:]]+deploy${END}|[[:space:]]secret[[:space:]]+(put|delete|bulk)${END}"
 WR_WRITE_WORDS='create|delete|update|put|upload|add|remove|set|rename|enable|disable|attach|detach|apply|import|bulk|publish|promote|revoke|rotate|purge|bind|unbind|migrate'
 CF_API_WRITE_RE='[[:space:]](-X|--request)[[:space:]=]*(POST|PUT|PATCH|DELETE)|[[:space:]](-d|--data[a-z-]*|--json|-F|--form|-T|--upload-file)([[:space:]=]|$)'
+# The directories a deploy reads its config from (--config/-c is a file, --cwd a
+# directory): checked against the session repository in step 4, like a cd.
+WR_DIRS=()
 while IFS= read -r seg; do
     printf '%s\n' "$seg" | grep -qE "$WR_BIN_RE" || continue
     rest=" $(printf '%s\n' "$seg" | sed -E "s#.*(^|[[:space:](/])(wrangler|cf)(@[^[:space:]]+)?([[:space:])]|$)##")"
@@ -140,6 +143,12 @@ while IFS= read -r seg; do
     fi
     if printf '%s\n' "$rest" | grep -qE "$WR_DEPLOY_RE"; then
         IAC=1
+        while IFS= read -r p; do
+            [ -n "$p" ] && WR_DIRS+=("$(dirname "$p")")
+        done < <(printf '%s\n' "$rest" | grep -oE '[[:space:]](--config|-c)[=[:space:]]+[^[:space:])]+' | sed -E 's/^[[:space:]]+(--config|-c)[=[:space:]]+//' || true)
+        while IFS= read -r p; do
+            [ -n "$p" ] && WR_DIRS+=("$p")
+        done < <(printf '%s\n' "$rest" | grep -oE '[[:space:]]--cwd[=[:space:]]+[^[:space:])]+' | sed -E 's/^[[:space:]]+--cwd[=[:space:]]+//' || true)
     elif printf '%s\n' "$rest" | tr -s '[:space:]' '\n' | grep -qxE "$WR_WRITE_WORDS"; then
         RAW=1
     fi
@@ -322,8 +331,11 @@ while IFS= read -r dir; do
             break
             ;;
     esac
-done < <(printf '%s\n' "$NORM" | grep -oE '(^|[;&|[:space:](])(cd|pushd)[[:space:]]+[^;&|[:space:])]+|-chdir=[^;&|[:space:]]+|git[[:space:]]+-C[[:space:]]+[^;&|[:space:]]+' |
-    sed -E 's/^[;&|[:space:](]*(cd|pushd)[[:space:]]+//; s/^-chdir=//; s/^git[[:space:]]+-C[[:space:]]+//' || true)
+done < <({
+    printf '%s\n' "$NORM" | grep -oE '(^|[;&|[:space:](])(cd|pushd)[[:space:]]+[^;&|[:space:])]+|-chdir=[^;&|[:space:]]+|git[[:space:]]+-C[[:space:]]+[^;&|[:space:]]+' |
+        sed -E 's/^[;&|[:space:](]*(cd|pushd)[[:space:]]+//; s/^-chdir=//; s/^git[[:space:]]+-C[[:space:]]+//' || true
+    [ -z "${WR_DIRS[*]:-}" ] || printf '%s\n' "${WR_DIRS[@]}"
+})
 if [ -n "$OUTSIDE" ]; then
     block "Infrastructure mutation BLOCKED -- the command moves to $OUTSIDE, outside the session repository ($REPO). The council gate only knows about the repository the session is in; run the command from the repository that owns that infrastructure."
 fi

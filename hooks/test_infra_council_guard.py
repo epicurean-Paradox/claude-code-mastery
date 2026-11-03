@@ -430,7 +430,7 @@ class TestCloudflare(GuardCase):
             "wrangler pages deploy dist",
             "wrangler preview",
             "~/bin/cf deploy",
-            "~/bin/cf deploy --config maintenance/wrangler.toml",
+            "~/bin/cf deploy --config infra/wrangler.toml",
             "(cd infra && ~/bin/cf deploy)",
             PTY_DEPLOY,
         ):
@@ -444,6 +444,20 @@ class TestCloudflare(GuardCase):
                 self.assertAllowed(r.run(DEPLOY))
                 r.commit(config, 'name = "w"\n', T3)
                 self.assertBlocked(r.run(DEPLOY), "PRE-DATES")
+
+    def test_a_deploy_of_a_config_outside_the_repo_is_blocked(self):
+        # --config and --cwd pick what is deployed, as -chdir does for terraform
+        r = self.fresh()
+        other = self.repo().root
+        self.assertAllowed(r.run("wrangler deploy --config infra/wrangler.toml"))
+        for cmd in (
+            f"~/bin/cf deploy --config {other}/wrangler.toml",
+            f"npx wrangler deploy --config={other}/wrangler.toml",
+            f"wrangler deploy -c {other}/wrangler.toml",
+            f"wrangler versions upload --cwd {other}",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertBlocked(r.run(cmd), "outside the session repository")
 
     def test_an_uncommitted_wrangler_config_blocks_the_deploy(self):
         r = self.fresh()
