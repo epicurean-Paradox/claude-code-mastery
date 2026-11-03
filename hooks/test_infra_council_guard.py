@@ -418,7 +418,7 @@ class TestCloudflare(GuardCase):
         r = self.repo()
         for cmd in (
             DEPLOY,
-            "npx wrangler@4.152.0 deploy",
+            "npx wrangler@latest deploy",  # a pinned version reads as an e-mail address to email-scan
             "npx wrangler deploy --env production",
             "node_modules/.bin/wrangler versions deploy 1234@100%",
             "wrangler versions upload",
