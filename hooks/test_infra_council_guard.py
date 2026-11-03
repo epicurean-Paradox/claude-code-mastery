@@ -405,6 +405,113 @@ class TestRawAws(GuardCase):
         self.assertBlocked(r.run(cmd), "same repository")
 
 
+DEPLOY = "wrangler " + "deploy"  # kept apart like APPLY
+PTY_DEPLOY = """printf 'n\\nn\\nn\\n' | script -q /dev/null env PATH="$PWD/node_modules/.bin:$PATH" ~/bin/cf deploy"""
+
+
+class TestCloudflare(GuardCase):
+    """wrangler, and cf: a wrapper that runs wrangler or, as `cf api`, the Cloudflare API.
+    A deploy applies the repository's wrangler config, which can repoint DNS (a custom domain),
+    so it takes the IaC gate; any other write is a raw call and needs a COUNCIL_ACK."""
+
+    def test_no_council_blocks_every_deploy_spelling(self):
+        r = self.repo()
+        for cmd in (
+            DEPLOY,
+            "npx wrangler@latest deploy",  # a pinned version reads as an e-mail address to email-scan
+            "npx wrangler deploy --env production",
+            "node_modules/.bin/wrangler versions deploy 1234@100%",
+            "wrangler versions upload",
+            "wrangler rollback 15fec74c",
+            "wrangler delete",
+            "wrangler triggers deploy",
+            "op read -n op://Private/x/y | wrangler secret put API_KEY",
+            "wrangler secret delete API_KEY",
+            "wrangler pages deploy dist",
+            "wrangler preview",
+            "~/bin/cf deploy",
+            "~/bin/cf deploy --config infra/wrangler.toml",
+            "(cd infra && ~/bin/cf deploy)",
+            PTY_DEPLOY,
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertBlocked(r.run(cmd), "No council record")
+
+    def test_a_wrangler_config_committed_after_the_record_blocks_the_deploy(self):
+        for config in ("wrangler.toml", "maintenance/wrangler.toml", "wrangler.jsonc"):
+            with self.subTest(config=config):
+                r = self.fresh()
+                self.assertAllowed(r.run(DEPLOY))
+                r.commit(config, 'name = "w"\n', T3)
+                self.assertBlocked(r.run(DEPLOY), "PRE-DATES")
+
+    def test_a_deploy_of_a_config_outside_the_repo_is_blocked(self):
+        # --config and --cwd pick what is deployed, as -chdir does for terraform
+        r = self.fresh()
+        other = self.repo().root
+        self.assertAllowed(r.run("wrangler deploy --config infra/wrangler.toml"))
+        for cmd in (
+            f"~/bin/cf deploy --config {other}/wrangler.toml",
+            f"npx wrangler deploy --config={other}/wrangler.toml",
+            f"wrangler deploy -c {other}/wrangler.toml",
+            f"wrangler versions upload --cwd {other}",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertBlocked(r.run(cmd), "outside the session repository")
+
+    def test_an_uncommitted_wrangler_config_blocks_the_deploy(self):
+        r = self.fresh()
+        r.write("wrangler.toml", 'name = "dirty"\n')
+        self.assertBlocked(r.run(PTY_DEPLOY), "uncommitted changes")
+
+    def test_raw_writes_need_an_ack(self):
+        r = self.repo()
+        for cmd in (
+            "~/bin/cf api /accounts/a/workers/domains/d -X DELETE",
+            "cf api /zones/z/dns_records -X POST -d @body.json",
+            "cf api /zones/z/dns_records/r -XPATCH --data {}",
+            "cf api /accounts/a/tokens --request PUT --data-binary @t.json",
+            "cf api /zones/z/settings/always_use_https --json {}",
+            "wrangler kv namespace create NS",
+            "wrangler kv key put k v --namespace-id n",
+            "wrangler r2 bucket delete b",
+            "wrangler d1 create db",
+            "wrangler d1 migrations apply db --remote",
+            "wrangler queues create q",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertBlocked(r.run(cmd), "No COUNCIL_ACK")
+        self.assertAllowed(
+            self.fresh().run(
+                f"COUNCIL_ACK={RECORD} cf api /accounts/a/workers/domains/d -X DELETE"
+            )
+        )
+
+    def test_reads_and_dry_runs_stay_open(self):
+        # red-first: pins over-blocking: wrangler and cf reads (dry runs, lists, tails, GETs) must never need a council
+        r = self.repo()
+        for cmd in (
+            "npx wrangler deploy --dry-run --outdir /tmp/bundle",
+            "PATH=node_modules/.bin:$PATH wrangler deploy --dry-run --outdir b",
+            "wrangler whoami",
+            "wrangler tail",
+            "wrangler dev",
+            "wrangler types",
+            "wrangler versions list",
+            "wrangler deployments list",
+            "wrangler secret list",
+            "wrangler kv namespace list",
+            "wrangler kv key get k --namespace-id n",
+            "wrangler d1 list",
+            "cf verify",
+            "cf api /accounts",
+            '~/bin/cf api "/accounts/a/workers/domains?hostname=autoria.telos.ong"',
+            "cf api /zones/z/dns_records | jq .result",
+        ):
+            with self.subTest(cmd=cmd):
+                self.assertAllowed(r.run(cmd))
+
+
 class TestCompoundCommands(GuardCase):
     def test_a_harmless_aws_call_does_not_excuse_an_iac_mutation(self):
         r = self.repo()

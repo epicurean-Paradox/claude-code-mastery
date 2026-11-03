@@ -20,7 +20,15 @@
 # the author did not already believe (LESSONS Lesson 30).
 #
 # READ-ONLY commands are never blocked: plan, validate, fmt, init, show, preview,
-# state list, output, and read-only AWS calls (describe/list/get/ls). Only mutations.
+# state list, output, read-only AWS calls (describe/list/get/ls), and wrangler or cf
+# reads (--dry-run, list, get, tail, whoami, dev, `cf api` GETs). Only mutations.
+#
+# Cloudflare: a wrangler deploy (or a rollback, a versions deploy, a secret change)
+# applies the repository's wrangler config, and a custom domain in it repoints DNS
+# (infra council 2026-11-02, S3), so it takes the IaC gate. `cf` is a wrapper that
+# passes its arguments to wrangler, or calls the Cloudflare API as `cf api <path>
+# [curl args]`. Any other wrangler write (kv, r2, d1, queues, ...) and any `cf api`
+# call that sends something is a raw call and needs a COUNCIL_ACK, like raw AWS.
 #
 # Configuration (environment, all optional):
 #   INFRA_COUNCIL_PATHS  space-separated git pathspecs that are infrastructure
@@ -37,7 +45,8 @@
 # Limits: this reads the command TEXT. It over-blocks (a mutation named in a string
 # or heredoc is blocked; run such scripts from a file) and it cannot see through
 # indirection: a variable holding the command, a wrapper script, `make deploy`, an
-# alias. It is a guard against the agent's own direct commands, not a sandbox.
+# alias. `wrangler d1 execute` is not judged: its SQL can read or write. It is a
+# guard against the agent's own direct commands, not a sandbox.
 #
 # Fails closed: any unexpected error exits 2, Claude Code's blocking exit for a
 # PreToolUse hook, which needs no jq.
@@ -99,27 +108,59 @@ AWS_VERBS='create|update|put|delete|modify|attach|detach|associate|disassociate|
 AWS_CONTROL='run-instances|start-instances|stop-instances|schedule-key-deletion|cancel-key-deletion|start-db-instance|stop-db-instance|start-db-cluster|stop-db-cluster'
 AWS_OPS='set-alarm-state|put-metric-data|put-log-events|put-events'
 AWS_SEG_RE='(^|[[:space:](/])aws[[:space:]]'
-RAW_AWS=0
+RAW=0
 while IFS= read -r seg; do
     printf '%s\n' "$seg" | grep -qE "$AWS_SEG_RE" || continue
     if printf '%s\n' "$seg" | grep -qE "[[:space:]]s3[[:space:]]+(rb|rm|mv|sync)([[:space:]]|$)"; then
-        RAW_AWS=1
+        RAW=1
         break
     fi
     VERB_TOKENS=$(printf '%s\n' "$seg" | tr -s '[:space:]' '\n' | grep -E "^((${AWS_VERBS})-[a-z0-9-]+|${AWS_CONTROL})$" || true)
     if [ -n "$VERB_TOKENS" ] && printf '%s\n' "$VERB_TOKENS" | grep -qvxE "$AWS_OPS"; then
-        RAW_AWS=1
+        RAW=1
         break
     fi
 done < <(printf '%s\n' "$NORM" | tr ';&|' '\n\n\n')
 
-if [ "$IAC" = 0 ] && [ "$RAW_AWS" = 0 ]; then exit 0; fi
+# wrangler and cf, one shell segment at a time. A dry run deploys nothing. The deploy
+# family applies the repository's config: the IaC gate. Any other write word, or a
+# `cf api` call that sets a write method or sends a body, is a raw call.
+WR_BIN_RE='(^|[[:space:](/])(wrangler|cf)(@[^[:space:]]+)?([[:space:])]|$)'
+END='([[:space:])]|$)'
+WR_DEPLOY_RE="^[[:space:]]*delete${END}|[[:space:]](deploy|rollback|preview)${END}|[[:space:]]versions[[:space:]]+(deploy|upload)${END}|[[:space:]]triggers[[:space:]]+deploy${END}|[[:space:]]secret[[:space:]]+(put|delete|bulk)${END}"
+WR_WRITE_WORDS='create|delete|update|put|upload|add|remove|set|rename|enable|disable|attach|detach|apply|import|bulk|publish|promote|revoke|rotate|purge|bind|unbind|migrate'
+CF_API_WRITE_RE='[[:space:]](-X|--request)[[:space:]=]*(POST|PUT|PATCH|DELETE)|[[:space:]](-d|--data[a-z-]*|--json|-F|--form|-T|--upload-file)([[:space:]=]|$)'
+# The directories a deploy reads its config from (--config/-c is a file, --cwd a
+# directory): checked against the session repository in step 4, like a cd.
+WR_DIRS=()
+while IFS= read -r seg; do
+    printf '%s\n' "$seg" | grep -qE "$WR_BIN_RE" || continue
+    rest=" $(printf '%s\n' "$seg" | sed -E "s#.*(^|[[:space:](/])(wrangler|cf)(@[^[:space:]]+)?([[:space:])]|$)##")"
+    if printf '%s\n' "$rest" | grep -qE "[[:space:]]--dry-run${END}"; then continue; fi
+    if printf '%s\n' "$rest" | grep -qE "^[[:space:]]*api${END}"; then
+        if printf '%s\n' "$rest" | grep -qiE "$CF_API_WRITE_RE"; then RAW=1; fi
+        continue
+    fi
+    if printf '%s\n' "$rest" | grep -qE "$WR_DEPLOY_RE"; then
+        IAC=1
+        while IFS= read -r p; do
+            [ -n "$p" ] && WR_DIRS+=("$(dirname "$p")")
+        done < <(printf '%s\n' "$rest" | grep -oE '[[:space:]](--config|-c)[=[:space:]]+[^[:space:])]+' | sed -E 's/^[[:space:]]+(--config|-c)[=[:space:]]+//' || true)
+        while IFS= read -r p; do
+            [ -n "$p" ] && WR_DIRS+=("$p")
+        done < <(printf '%s\n' "$rest" | grep -oE '[[:space:]]--cwd[=[:space:]]+[^[:space:])]+' | sed -E 's/^[[:space:]]+--cwd[=[:space:]]+//' || true)
+    elif printf '%s\n' "$rest" | tr -s '[:space:]' '\n' | grep -qxE "$WR_WRITE_WORDS"; then
+        RAW=1
+    fi
+done < <(printf '%s\n' "$NORM" | tr ';&|' '\n\n\n')
+
+if [ "$IAC" = 0 ] && [ "$RAW" = 0 ]; then exit 0; fi
 
 # ---------------------------------------------------------------------------
 # 2. Configuration and the repository the session is in
 # ---------------------------------------------------------------------------
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEFAULT_PATHS='infra/ *.tf *.tfvars *.tf.json *.hcl serverless.yml serverless.yaml template.yaml template.yml samconfig.toml cdk.json Pulumi.yaml Pulumi.*.yaml'
+DEFAULT_PATHS='infra/ *.tf *.tfvars *.tf.json *.hcl serverless.yml serverless.yaml template.yaml template.yml samconfig.toml cdk.json Pulumi.yaml Pulumi.*.yaml *wrangler.toml *wrangler.json *wrangler.jsonc'
 INFRA_PATHS=()
 read -r -a INFRA_PATHS <<<"${INFRA_COUNCIL_PATHS-$DEFAULT_PATHS}" || true
 if [ -z "${INFRA_PATHS[*]:-}" ]; then
@@ -213,9 +254,9 @@ record_reason() {
 }
 
 # ---------------------------------------------------------------------------
-# 3. Raw AWS mutation: needs COUNCIL_ACK=<record> in THIS repository
+# 3. Raw AWS or Cloudflare mutation: needs COUNCIL_ACK=<record> in THIS repository
 # ---------------------------------------------------------------------------
-if [ "$RAW_AWS" = 1 ]; then
+if [ "$RAW" = 1 ]; then
     ACK=$(printf '%s\n' "$CMD" | grep -oE 'COUNCIL_ACK=[^[:space:];&|]+' | head -1 | cut -d= -f2- || true)
     ACK_REASON="No COUNCIL_ACK given."
     if [ -n "$ACK" ]; then
@@ -246,7 +287,7 @@ if [ "$RAW_AWS" = 1 ]; then
         fi
     fi
     if [ -n "$ACK_REASON" ]; then
-        block "$(printf 'Raw AWS infrastructure mutation BLOCKED.
+        block "$(printf 'Raw infrastructure mutation BLOCKED (a direct AWS or Cloudflare call).
 
 Command: %s
 
@@ -264,10 +305,11 @@ TO PROCEED, either:
      The record must be committed, in this repository, come after the newest
      infra commit, and pass agent-council-lint.py.
 
-Read-only AWS calls (describe/list/get/ls) and operational writes
-(set-alarm-state, put-metric-data, put-log-events, put-events) are never blocked.' "$CMD" "$ACK_REASON")"
+Read-only AWS calls (describe/list/get/ls), operational writes (set-alarm-state,
+put-metric-data, put-log-events, put-events), wrangler and cf reads (--dry-run,
+list, get, tail, whoami) and `cf api` GETs are never blocked.' "$CMD" "$ACK_REASON")"
     fi
-    # The ACK covers the raw AWS call only. An IaC mutation in the same command still
+    # The ACK covers the raw call only. An IaC mutation in the same command still
     # has to pass the IaC gate below.
     if [ "$IAC" = 0 ]; then exit 0; fi
 fi
@@ -289,8 +331,11 @@ while IFS= read -r dir; do
             break
             ;;
     esac
-done < <(printf '%s\n' "$NORM" | grep -oE '(^|[;&|[:space:](])(cd|pushd)[[:space:]]+[^;&|[:space:])]+|-chdir=[^;&|[:space:]]+|git[[:space:]]+-C[[:space:]]+[^;&|[:space:]]+' |
-    sed -E 's/^[;&|[:space:](]*(cd|pushd)[[:space:]]+//; s/^-chdir=//; s/^git[[:space:]]+-C[[:space:]]+//' || true)
+done < <({
+    printf '%s\n' "$NORM" | grep -oE '(^|[;&|[:space:](])(cd|pushd)[[:space:]]+[^;&|[:space:])]+|-chdir=[^;&|[:space:]]+|git[[:space:]]+-C[[:space:]]+[^;&|[:space:]]+' |
+        sed -E 's/^[;&|[:space:](]*(cd|pushd)[[:space:]]+//; s/^-chdir=//; s/^git[[:space:]]+-C[[:space:]]+//' || true
+    [ -z "${WR_DIRS[*]:-}" ] || printf '%s\n' "${WR_DIRS[@]}"
+})
 if [ -n "$OUTSIDE" ]; then
     block "Infrastructure mutation BLOCKED -- the command moves to $OUTSIDE, outside the session repository ($REPO). The council gate only knows about the repository the session is in; run the command from the repository that owns that infrastructure."
 fi
