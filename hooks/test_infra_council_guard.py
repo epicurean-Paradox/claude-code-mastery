@@ -69,14 +69,23 @@ class Repo:
         self.git("add", rel)
         self.git("commit", "-q", "-m", rel, date=date, committer_date=committer_date)
 
-    def run(self, command, env=None, process_cwd=None, tool="Bash", path=None):
+    def run(
+        self,
+        command,
+        env=None,
+        process_cwd=None,
+        tool="Bash",
+        path=None,
+        session_cwd=None,
+    ):
         """(blocked, reason) for one tool call. A deny JSON is a block; so is exit 2, the
-        blocking exit a crashing hook must use. Anything else non-zero fails the test."""
+        blocking exit a crashing hook must use. Anything else non-zero fails the test.
+        session_cwd: the session's directory, when it is not this repository."""
         payload = json.dumps(
             {
                 "tool_name": tool,
                 "tool_input": {"command": command},
-                "cwd": str(self.root),
+                "cwd": str(session_cwd or self.root),
             }
         )
         full_env = dict(os.environ)
@@ -510,6 +519,48 @@ class TestCloudflare(GuardCase):
         ):
             with self.subTest(cmd=cmd):
                 self.assertAllowed(r.run(cmd))
+
+
+class TestSessionOutsideARepo(GuardCase):
+    """A session whose directory is in no repository (a notes vault, a home directory) acts on
+    one through a leading `cd <repo> &&`; that repository is then judged as the session's."""
+
+    def test_a_leading_cd_into_a_repo_is_judged_against_that_repo(self):
+        r = self.fresh()
+        outside = self.repo(git=False).root
+        self.assertAllowed(r.run(f"cd {r.root} && {APPLY}", session_cwd=outside))
+        self.assertAllowed(
+            r.run(f"cd {r.root.name} && {APPLY}", session_cwd=r.root.parent)
+        )
+        self.assertAllowed(
+            r.run(f"cd {r.root} && COUNCIL_ACK={RECORD} {RAW_AWS}", session_cwd=outside)
+        )
+        self.assertAllowed(
+            r.run(
+                f"cd {r.root} && {DEPLOY} --config infra/wrangler.toml",
+                session_cwd=outside,
+            )
+        )
+        r.commit("infra/main.tf", 'resource "null_resource" "y" {}\n', T3)
+        self.assertBlocked(
+            r.run(f"cd {r.root} && {APPLY}", session_cwd=outside), "PRE-DATES"
+        )
+
+    def test_a_leading_cd_does_not_excuse_a_later_cd_elsewhere(self):
+        r = self.fresh()
+        other = self.repo()
+        outside = self.repo(git=False).root
+        cmd = f"cd {r.root} && cd {other.root} && {APPLY}"
+        self.assertBlocked(
+            r.run(cmd, session_cwd=outside), "outside the session repository"
+        )
+
+    def test_without_a_leading_cd_a_session_outside_a_repo_is_blocked(self):
+        # red-first: pins that a session in no repository stays blocked unless a leading cd names one
+        outside = self.repo(git=False)
+        for cmd in (APPLY, DEPLOY, f"echo x && cd /tmp && {APPLY}"):
+            with self.subTest(cmd=cmd):
+                self.assertBlocked(outside.run(cmd), "not inside a git repository")
 
 
 class TestCompoundCommands(GuardCase):
